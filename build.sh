@@ -274,9 +274,11 @@ rm -f "$ROOTFS/usr/sbin/policy-rc.d" "$ROOTFS/etc/resolv.conf"
 log "creating squashfs (zstd)"
 mkdir -p "$ISO_TREE/live" "$ISO_TREE/boot/grub"
 cleanup_mounts || true
+# live-boot needs the mountpoint DIRECTORIES inside the squashfs (dev, proc,
+# sys, run) - empty them but keep them, systemd mounts tmpfs over them.
+rm -rf "$ROOTFS/run"/* "$ROOTFS/tmp"/* 2>/dev/null || true
 mksquashfs "$ROOTFS" "$ISO_TREE/live/filesystem.squashfs" \
-  -comp zstd -Xcompression-level 19 -noappend -no-recovery \
-  -e proc sys dev run tmp >/dev/null
+  -comp zstd -Xcompression-level 19 -noappend -no-recovery >/dev/null
 log "squashfs size: $(du -h "$ISO_TREE/live/filesystem.squashfs" | cut -f1)"
 
 # Kernel + initrd
