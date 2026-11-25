@@ -143,14 +143,25 @@ cp "$ASSETS"/icon-*.png "$ROOTFS/usr/local/share/icons/hicolor/48x48/apps/" 2>/d
   { mkdir -p "$ROOTFS/usr/local/share/icons/hicolor/48x48/apps"; cp "$ASSETS"/icon-*.png "$ROOTFS/usr/local/share/icons/hicolor/48x48/apps/" 2>/dev/null || true; }
 cp "$ASSETS"/grub-bg.png "$ROOTFS/usr/share/bravos/grub/grub-bg.png"
 
-# Brave initial preferences (start page, sane defaults)
-BRAVE_DIR="$(find "$ROOTFS/usr/lib" -maxdepth 1 -type d -name 'brave-browser*' | head -n1 || true)"
-if [ -n "${BRAVE_DIR:-}" ]; then
+# Brave initial preferences (start page, sane defaults).
+# The official deb installs to /opt/brave.com/brave; look there first, then
+# fall back to parsing the launcher script for the real app directory.
+BRAVE_DIR=""
+for cand in "$ROOTFS/opt/brave.com/brave" "$ROOTFS/usr/lib/brave-browser"; do
+  [ -d "$cand" ] && BRAVE_DIR="$cand" && break
+done
+if [ -z "$BRAVE_DIR" ] && [ -x "$ROOTFS/usr/bin/brave-browser-stable" ]; then
+  APP="$(sed -n 's/^[^#]*exec[^"]*"\(\/[^"]*brave[^"]*\)".*/\1/p' \
+    "$ROOTFS/usr/bin/brave-browser-stable" | head -n1)"
+  [ -n "$APP" ] && [ -d "$ROOTFS$(dirname "$APP")" ] && \
+    BRAVE_DIR="$ROOTFS$(dirname "$APP")"
+fi
+if [ -n "$BRAVE_DIR" ]; then
   cp "$REPO_DIR/config/initial_preferences" "$BRAVE_DIR/initial_preferences"
   cp "$REPO_DIR/config/initial_preferences" "$BRAVE_DIR/master_preferences"
   log "brave initial_preferences installed to $BRAVE_DIR"
 else
-  fail "brave-browser not found in rootfs"
+  fail "brave app dir not found (checked /opt/brave.com/brave, /usr/lib/brave-browser)"
 fi
 
 # -----------------------------------------------------------------------------
