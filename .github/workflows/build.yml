@@ -31,6 +31,7 @@ jobs:
             grub2-common grub-efi-amd64-bin mtools librsvg2-bin curl \
             ca-certificates gnupg python3-pil
           sudo mkdir -p /mnt/bravos-build
+          sudo chown "$USER:$USER" /mnt/bravos-build
 
       - name: Generate assets
         run: python3 scripts/gen_assets.py
@@ -44,14 +45,15 @@ jobs:
         run: |
           ls -lh /mnt/bravos-build/output/
           cat /mnt/bravos-build/output/SHA256SUMS
+          mkdir -p out
+          sudo cp /mnt/bravos-build/output/* out/
+          sudo chown -R "$USER:$USER" out/
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: braveos-iso
-          path: |
-            /mnt/bravos-build/output/*.iso
-            /mnt/bravos-build/output/SHA256SUMS
+          path: out/*
           retention-days: 30
           if-no-files-found: error
 
@@ -70,7 +72,7 @@ jobs:
               --title "BraveOS ${VERSION}" \
               --notes "Bootable ISO of BraveOS ${VERSION} (unofficial Brave-browser-centered Linux distribution). Boot via USB/DVD; UEFI machines must disable Secure Boot for v1. See README for details."
           fi
-          gh release upload "$TAG" /mnt/bravos-build/output/*.iso /mnt/bravos-build/output/SHA256SUMS \
+          gh release upload "$TAG" out/*.iso out/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
 
   smoke-test:

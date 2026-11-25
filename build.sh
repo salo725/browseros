@@ -45,6 +45,13 @@ ASSETS="$BUILD_DIR/assets"
 # -----------------------------------------------------------------------------
 # 2. debootstrap - clean base
 # -----------------------------------------------------------------------------
+# older hosts may not know the bookworm suite; the generic 'gutsy' template
+# works fine when an explicit mirror is given
+if [ ! -e /usr/share/debootstrap/scripts/bookworm ] && [ -d /usr/share/debootstrap/scripts ]; then
+  log "adding bookworm symlink to debootstrap scripts"
+  ln -sf gutsy /usr/share/debootstrap/scripts/bookworm
+fi
+
 if [ ! -e "$ROOTFS/bin/sh" ]; then
   log "debootstrap $DISTRO (minbase)"
   debootstrap --variant=minbase --include="systemd-sysv,dbus,ca-certificates,sudo" \
@@ -72,8 +79,6 @@ cat > "$ROOTFS/usr/sbin/policy-rc.d" <<'EOF'
 exit 101
 EOF
 chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
-
-DEB="chroot $ROOTFS"
 
 # -----------------------------------------------------------------------------
 # 3. apt sources: Debian + Brave official repository
@@ -155,10 +160,15 @@ cat > "$ROOTFS/etc/hosts" <<'EOF'
 127.0.1.1 braveos
 EOF
 
-# Live user (uid 1000)
+# Live user (uid 1000) - create base account first, then join groups that
+# actually exist (some groups like plugdev may be absent in a minbase chroot)
 chroot "$ROOTFS" groupadd -g 1000 brave 2>/dev/null || true
-chroot "$ROOTFS" useradd -m -u 1000 -g 1000 -s /bin/bash -G \
-  "video,audio,input,plugdev,netdev,adm,disk,cdrom" brave 2>/dev/null || true
+chroot "$ROOTFS" useradd -m -u 1000 -g 1000 -s /bin/bash brave \
+  || chroot "$ROOTFS" usermod -u 1000 -g 1000 brave 2>/dev/null || true
+for g in video audio input plugdev netdev adm disk cdrom; do
+  chroot "$ROOTFS" groupadd -f "$g" 2>/dev/null || true
+  chroot "$ROOTFS" usermod -aG "$g" brave 2>/dev/null || true
+done
 chroot "$ROOTFS" bash -c "echo 'brave:brave' | chpasswd"
 chroot "$ROOTFS" bash -c "echo 'root:bravos-root' | chpasswd"
 echo "brave ALL=(ALL:ALL) NOPASSWD:ALL" > "$ROOTFS/etc/sudoers.d/bravos"
@@ -210,8 +220,17 @@ chroot "$ROOTFS" systemctl disable getty@tty1.service 2>/dev/null || true
 
 # xdg dirs
 mkdir -p "$ROOTFS/home/brave/.config"
-chroot "$ROOTFS" bash -c 'XDG_RUNTIME_DIR=/run/user/1000 xdg-user-dirs-update --force 2>/dev/null || true' || true
 chroot "$ROOTFS" chown -R brave:brave /home/brave
+
+# overlay files were copied by the CI user; normalize ownership to root.
+# NOTE: /etc is NOT chowned wholesale - /etc/shadow must stay root:shadow.
+for d in /etc/xdg /etc/systemd /etc/skel /etc/polkit-1 /etc/default \
+         /etc/sysctl.d /etc/hostname /etc/hosts; do
+  chroot "$ROOTFS" chown -R root:root "$d" 2>/dev/null || true
+done
+chroot "$ROOTFS" chown -R root:root /usr 2>/dev/null || true
+chroot "$ROOTFS" chown root:shadow /etc/shadow /etc/gshadow 2>/dev/null || true
+chroot "$ROOTFS" chown -R brave:brave /home/brave 2>/dev/null || true
 
 # Empty machine-id: regenerated on each live boot
 : > "$ROOTFS/etc/machine-id"
@@ -225,8 +244,8 @@ chroot "$ROOTFS" update-initramfs -u -t
 # 7. Cleanup rootfs (size matters)
 # -----------------------------------------------------------------------------
 log "cleaning rootfs"
-run_in_rootfs $DEB apt-get clean
-run_in_rootfs $DEB rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
+run_in_rootfs apt-get clean
+run_in_rootfs rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
   /var/cache/fontconfig /var/log/* /var/tmp/*
 chroot "$ROOTFS" rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
   /usr/share/gnome/help 2>/dev/null || true
