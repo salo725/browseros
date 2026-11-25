@@ -251,6 +251,17 @@ def finish(child, ok):
             LOG.close()
         except Exception:
             pass
+    # On failure, dump the serial tail into the job log so the failure
+    # point is visible without downloading artifacts.
+    if not ok:
+        try:
+            tail = open(os.path.join(OUT, "serial-log.txt"),
+                        errors="replace").read().splitlines()[-160:]
+            print("===== SERIAL TAIL (last %d lines) =====" % len(tail))
+            print("\n".join(tail))
+            print("===== END SERIAL TAIL =====")
+        except OSError:
+            print("(serial log unavailable)")
     with open(os.path.join(OUT, "ram-report.txt"), "w") as f:
         json.dump(results, f, indent=2)
     print(json.dumps(results, indent=2))
