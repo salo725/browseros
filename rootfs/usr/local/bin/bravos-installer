@@ -470,17 +470,25 @@ def run_selftest():
     print("SELTEST-PASS dry-init" if dry_ok else "SELTEST-FAIL dry-init")
     ok = ok and dry_ok
     # The wizard needs a display; on a serial console verify the logic only.
-    try:
-        have_display = bool(Gtk.init_check())
-    except Exception:
-        have_display = False
+    # NOTE: Gtk.init_check() alone is NOT trustworthy here (PyGObject may
+    # report success without a DISPLAY), so require $DISPLAY explicitly and
+    # treat any construction failure as "skipped", never as a crash.
+    have_display = bool(os.environ.get("DISPLAY"))
     if have_display:
-        w = InstallerWindow(dry=True)
-        w.show_all()
-        names = [w.stack.get_child_by_name(n) is not None
-                 for n in ("welcome", "disk", "options", "confirm",
-                           "progress", "done")]
-        pages_ok = all(names)
+        try:
+            have_display = bool(Gtk.init_check())
+        except Exception:
+            have_display = False
+    if have_display:
+        try:
+            w = InstallerWindow(dry=True)
+            w.show_all()
+            names = [w.stack.get_child_by_name(n) is not None
+                     for n in ("welcome", "disk", "options", "confirm",
+                               "progress", "done")]
+            pages_ok = all(names)
+        except Exception:
+            pages_ok = False
         print("SELTEST-PASS pages" if pages_ok else "SELTEST-FAIL pages")
         ok = ok and pages_ok
     else:

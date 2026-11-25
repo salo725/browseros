@@ -9,6 +9,7 @@ ci/screenshot-*.png. Exit code 0 = core pass.
 """
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -38,6 +39,36 @@ def kvm_usable():
 KVM = kvm_usable()
 LOG = None
 results = {"kvm": KVM, "checks": []}
+
+
+def mem_from_log():
+    """Parse the last MEMB total/avail pair from the captured serial log.
+
+    Parsing the log file directly (plain re) is immune to the pexpect
+    buffer-position quirks seen on timed-out expects.
+    """
+    try:
+        pairs = re.findall(r"MEMB (\d+) (\d+)",
+                           open(os.path.join(OUT, "serial-log.txt"),
+                                errors="replace").read())
+    except OSError:
+        return None
+    return pairs[-1] if pairs else None
+
+
+def wait_for_session_ready(timeout_s):
+    """The session writes 'session-ready' to kmsg during boot (often BEFORE
+    the login prompt), so match it against the whole captured serial log."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            if "session-ready" in open(os.path.join(OUT, "serial-log.txt"),
+                                       errors="replace").read():
+                return True
+        except OSError:
+            pass
+        time.sleep(2)
+    return False
 
 
 def check(name, ok, detail=""):
@@ -83,7 +114,7 @@ def mem_used_mb(child):
 
 def main():
     global LOG
-    log = open(os.path.join(OUT, "serial-log.txt"), "w")
+    log = open(os.path.join(OUT, "serial-log.txt"), "w", buffering=1)
     LOG = log
 
     accel = "kvm" if KVM else "tcg"
@@ -140,24 +171,26 @@ def main():
         return
 
     # wait for the session-ready marker from autostart
-    try:
-        child.expect(r"session-ready", timeout=240)
-        check("session-ready", True)
-    except pexpect.TIMEOUT:
-        check("session-ready", False, "marker missing; session may have failed")
+    # session-ready: written to kmsg during boot; poll the captured log
+    session_ok = wait_for_session_ready(150)
+    check("session-ready", session_ok,
+          "" if session_ok else "marker missing; session may have failed")
 
-    # idle RAM measurement
+    # idle RAM measurement (parsed from the serial log, not the pexpect buffer)
     child.sendline("free -b | awk 'NR==2{printf \"MEMB %s %s\", $2, $7}'")
-    try:
-        child.expect("MEMB (\\d+) (\\d+)", timeout=60)
-        total_b = int(child.match.group(1))
-        avail_b = int(child.match.group(2))
+    pair = None
+    deadline = time.time() + 60
+    while time.time() < deadline and pair is None:
+        time.sleep(2)
+        pair = mem_from_log()
+    if pair:
+        total_b, avail_b = int(pair[0]), int(pair[1])
         used_mb = (total_b - avail_b) // (1024 * 1024)
         results["idle_used_mb"] = used_mb
         check("idle-ram", used_mb <= 400,
               "total=%dMB avail=%dMB used=%dMB (target ≤400)"
               % (total_b // (1024 * 1024), avail_b // (1024 * 1024), used_mb))
-    except pexpect.TIMEOUT:
+    else:
         check("idle-ram", False, "no free output")
 
     # process checks
@@ -218,17 +251,20 @@ def main():
 
     time.sleep(5)
 
-    # RAM with brave running
+    # RAM with brave running (same log-file parsing as idle)
     child.sendline("free -b | awk 'NR==2{printf \"MEMB %s %s\", $2, $7}'")
-    try:
-        child.expect("MEMB (\\d+) (\\d+)", timeout=30)
-        total_b = int(child.match.group(1))
-        avail_b = int(child.match.group(2))
+    pair2 = None
+    deadline = time.time() + 60
+    while time.time() < deadline and pair2 is None:
+        time.sleep(2)
+        pair2 = mem_from_log()
+    if pair2:
+        total_b, avail_b = int(pair2[0]), int(pair2[1])
         results["brave_used_mb"] = (total_b - avail_b) // (1024 * 1024)
         check("brave-ram", True, "with brave ~%d MB"
               % results["brave_used_mb"])
-    except pexpect.TIMEOUT:
-        pass
+    else:
+        check("brave-ram", False, "no free output")
 
     shot2 = qmp_screenshot(os.path.join(OUT, "screenshot-brave.png"))
     check("screenshot-brave", shot2)
