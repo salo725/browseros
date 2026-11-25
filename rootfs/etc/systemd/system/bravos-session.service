@@ -4,11 +4,10 @@ Conflicts=getty@tty1.service
 After=getty@tty1.service systemd-user-sessions.service network.target
 Wants=network.target
 
+# Root runs X (the console/DRM handshake needs it on a bare live boot);
+# the user session itself is dropped to 'brave' via runuser inside the script.
 [Service]
 Type=simple
-User=brave
-Group=brave
-PAMName=login
 TTYPath=/dev/tty1
 TTYReset=no
 TTYVHangup=yes

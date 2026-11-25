@@ -1,42 +1,51 @@
 #!/bin/bash
-# BraveOS graphical session launcher (runs as user 'brave' via systemd).
-# Starts X on vt1, then an Openbox session; logs to the runtime dir.
+# BraveOS graphical session launcher (runs as ROOT via systemd).
+# Root owns the console and DRM device on a bare live boot, so Xorg must be
+# started here; the actual desktop session is dropped to 'brave' via runuser.
 set -u
 
-RD="${XDG_RUNTIME_DIR:-/tmp}"
+RD=/run/bravos-session
 LOG="$RD/bravos-session.log"
+mkdir -p "$RD"
+chmod 755 "$RD"
 exec > "$LOG" 2>&1
 
-echo "bravos-session: starting at $(date)"
+kmsg() { echo "bravos-session: $*" > /dev/kmsg 2>/dev/null || true; }
 
-# Session environment
+echo "bravos-session: starting at $(date)"
+kmsg "starting"
+
 export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=BRAVEOS
 export DESKTOP_SESSION=bravos
 
-# Start X on vt1
+cleanup() { [ -n "${XORG_PID:-}" ] && kill "$XORG_PID" 2>/dev/null || true; }
+trap cleanup EXIT
+
+# X on vt1 as root
 Xorg :0 vt1 -nolisten tcp -novtswitch -logfile "$RD/xorg.log" &
 XORG_PID=$!
-echo "bravos-session: Xorg pid $XORG_PID"
 
-for i in $(seq 1 30); do
+for i in $(seq 1 40); do
   [ -S /tmp/.X11-unix/X0 ] && break
+  kill -0 "$XORG_PID" 2>/dev/null || break
   sleep 0.5
 done
+
 if [ ! -S /tmp/.X11-unix/X0 ]; then
-  echo "bravos-session: X failed to start; falling back to console login"
+  kmsg "X FAILED - dumping xorg log to console"
+  echo "bravos-session: X failed; xorg log tail follows:"
+  tail -n 30 "$RD/xorg.log" 2>/dev/null
+  tail -n 20 "$RD/xorg.log" > /dev/kmsg 2>/dev/null || true
   touch "$RD/session-failed"
   exit 1
 fi
-export DISPLAY=:0
 echo "bravos-session: X socket ready"
 
-# Session bus
-if command -v dbus-launch >/dev/null 2>&1; then
-  eval "$(dbus-launch --sh-syntax --exit-with-session)"
-  export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
-fi
-
-echo "bravos-session: launching openbox session"
 touch "$RD/session-ready"
-exec openbox-session
+kmsg "session-ready (X up; launching user session)"
+
+runuser -u brave -- /usr/local/bin/bravos-session-user
+RC=$?
+kmsg "user session exited rc=$RC"
+exit $RC

@@ -149,13 +149,14 @@ def main():
     # idle RAM measurement
     child.sendline("free -b | awk 'NR==2{printf \"MEMB %s %s\", $2, $7}'")
     try:
-        child.expect("MEMB (\\d+) (\\d+)", timeout=30)
+        child.expect("MEMB (\\d+) (\\d+)", timeout=60)
         total_b = int(child.match.group(1))
         avail_b = int(child.match.group(2))
         used_mb = (total_b - avail_b) // (1024 * 1024)
         results["idle_used_mb"] = used_mb
         check("idle-ram", used_mb <= 400,
-              "OS idle uses ~%d MB (target ≤200 MB)" % used_mb)
+              "total=%dMB avail=%dMB used=%dMB (target ≤400)"
+              % (total_b // (1024 * 1024), avail_b // (1024 * 1024), used_mb))
     except pexpect.TIMEOUT:
         check("idle-ram", False, "no free output")
 

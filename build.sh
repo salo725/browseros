@@ -250,6 +250,23 @@ chroot "$ROOTFS" chown -R brave:brave /home/brave 2>/dev/null || true
 : > "$ROOTFS/etc/machine-id"
 rm -f "$ROOTFS/var/lib/dbus/machine-id"
 
+# Restore the canonical setuid set and verify: any filesystem op that drops
+# the suid bit breaks sudo (and friends) in the guest. Fail the build loudly
+# instead of shipping an image where privileged operations cannot work.
+for b in /usr/bin/sudo /usr/bin/passwd /usr/bin/su /usr/bin/mount /usr/bin/umount \
+         /usr/bin/chsh /usr/bin/chfn /usr/bin/newgrp /usr/bin/gpasswd; do
+  [ -f "$ROOTFS$b" ] && chroot "$ROOTFS" chmod 4755 "$b"
+done
+if [ -f "$ROOTFS/usr/lib/dbus-1.0/dbus-daemon-launch-helper" ]; then
+  chroot "$ROOTFS" chown root:messagebus /usr/lib/dbus-1.0/dbus-daemon-launch-helper
+  chroot "$ROOTFS" chmod 4750 /usr/lib/dbus-1.0/dbus-daemon-launch-helper
+fi
+[ -f "$ROOTFS/usr/bin/sudo" ] || fail "sudo binary missing from rootfs"
+[ -u "$ROOTFS/usr/bin/sudo" ] || fail "/usr/bin/sudo lost suid bit"
+[ "$(stat -c %u "$ROOTFS/usr/bin/sudo")" = "0" ] || fail "/usr/bin/sudo not owned by root"
+chroot "$ROOTFS" visudo -c >/dev/null || fail "sudoers validation failed"
+log "suid set restored and verified"
+
 # Rebuild initramfs WITH live-boot hooks
 log "updating initramfs (live-boot hooks)"
 chroot "$ROOTFS" update-initramfs -u -t
