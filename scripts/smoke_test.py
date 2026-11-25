@@ -21,7 +21,21 @@ from PIL import Image
 OUT = "ci"
 os.makedirs(OUT, exist_ok=True)
 ISO = sys.argv[1] if len(sys.argv) > 1 else "braveos.iso"
-KVM = os.path.exists("/dev/kvm")
+
+
+def kvm_usable():
+    """/dev/kvm must exist AND be writable by this user."""
+    if not os.path.exists("/dev/kvm"):
+        return False
+    try:
+        fd = os.open("/dev/kvm", os.O_RDWR)
+        os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+KVM = kvm_usable()
 LOG = None
 results = {"kvm": KVM, "checks": []}
 
@@ -72,7 +86,7 @@ def main():
     log = open(os.path.join(OUT, "serial-log.txt"), "w")
     LOG = log
 
-    accel = "kvm:tcg" if KVM else "tcg"
+    accel = "kvm" if KVM else "tcg"
     cmd = [
         "qemu-system-x86_64",
         "-machine", "pc,accel=%s" % accel,
@@ -93,9 +107,9 @@ def main():
     child.logfile_read = log
     t0 = time.time()
 
-    # GRUB menu (serial)
+    # GRUB menu (serial). TCG (no KVM) emulation is slow: be generous.
     try:
-        child.expect(["BraveOS", "GNU GRUB"], timeout=120)
+        child.expect(["BraveOS", "GNU GRUB"], timeout=300)
         grub_at = time.time() - t0
         check("grub-menu", True, "menu on serial after %.1fs" % grub_at)
     except pexpect.TIMEOUT:
@@ -105,11 +119,11 @@ def main():
 
     # default entry auto-boots after timeout=6; wait for login prompt
     try:
-        child.expect(r"braveos login:", timeout=420)
+        child.expect(r"braveos login:", timeout=900)
         boot_at = time.time() - t0
         check("live-boot", True, "login prompt after %.1fs" % boot_at)
     except pexpect.TIMEOUT:
-        check("live-boot", False, "no login prompt within 420s")
+        check("live-boot", False, "no login prompt within 900s")
         finish(child, False)
         return
 
@@ -127,7 +141,7 @@ def main():
 
     # wait for the session-ready marker from autostart
     try:
-        child.expect(r"session-ready", timeout=120)
+        child.expect(r"session-ready", timeout=240)
         check("session-ready", True)
     except pexpect.TIMEOUT:
         check("session-ready", False, "marker missing; session may have failed")
@@ -165,7 +179,7 @@ def main():
     # settings self-test on the real display
     child.sendline("DISPLAY=:0 /usr/local/bin/bravos-settings --selftest")
     try:
-        child.expect(r"SELTEST-DONE ok=(True|False)", timeout=120)
+        child.expect(r"SELTEST-DONE ok=(True|False)", timeout=240)
         ok_settings = child.match.group(1) == "True"
         check("settings-selftest", ok_settings)
     except pexpect.TIMEOUT:

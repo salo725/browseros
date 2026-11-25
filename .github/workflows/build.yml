@@ -89,6 +89,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 python3-pip
           pip3 install --quiet pexpect pillow
+          # make KVM usable by the runner user (images often leave it root-only)
+          sudo chmod 666 /dev/kvm || true
           ls -l /dev/kvm || echo "NO KVM - falling back to TCG"
 
       - name: Download ISO artifact
