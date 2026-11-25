@@ -1,0 +1,92 @@
+# BraveOS rootfs package list (Debian bookworm).
+# Installed with --no-install-recommends; essentials grouped by role.
+
+# --- base / init ---
+systemd-sysv
+sudo
+dbus
+dbus-x11
+ca-certificates
+rfkill
+
+# --- kernel + firmware (2008-2022 hardware coverage) ---
+linux-image-amd64
+firmware-linux-free
+firmware-linux-nonfree
+firmware-misc-nonfree
+firmware-iwlwifi
+firmware-realtek
+firmware-amd-graphics
+firmware-intel-sound
+firmware-sof-signed
+
+# --- graphics: Mesa GL + hardware video decode ---
+libgl1-mesa-dri
+libglx-mesa0
+libegl-mesa0
+mesa-va-drivers
+mesa-vdpau-drivers
+i965-va-driver
+intel-media-va-driver
+
+# --- X server ---
+xserver-xorg-core
+xserver-xorg-input-libinput
+x11-xserver-utils
+xserver-xorg-video-amdgpu
+xserver-xorg-video-ati
+xserver-xorg-video-intel
+xserver-xorg-video-fbdev
+
+# --- session stack (lightweight, no DE) ---
+openbox
+picom
+tint2
+
+# --- applications: browser, file manager, debug terminal ---
+brave-browser
+pcmanfm
+xterm
+
+# --- network ---
+networkmanager
+network-manager-gnome
+wpa_supplicant
+
+# --- audio ---
+pulseaudio
+alsa-utils
+
+# --- custom UI runtime ---
+python3-gi
+gir1.2-gtk-3.0
+
+# --- fonts ---
+fonts-dejavu-core
+fonts-liberation
+fonts-noto-core
+
+# --- live system ---
+live-boot
+
+# --- installer dependencies ---
+parted
+dosfstools
+e2fsprogs
+rsync
+efibootmgr
+policykit-1
+grub-common
+grub2-common
+grub-pc-bin
+grub-efi-amd64-bin
+
+# --- diagnostics / housekeeping ---
+zram-tools
+pciutils
+usbutils
+kmod
+xdg-user-dirs
+xdg-utils
+shared-mime-info
+desktop-file-utils

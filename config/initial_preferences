@@ -1,0 +1,33 @@
+{
+  "homepage": "file:///usr/share/bravos/start/start.html",
+  "homepage_is_newtabpage": false,
+  "restore_on_startup": 4,
+  "startup_urls": ["file:///usr/share/bravos/start/start.html"],
+  "bookmark_bar": {
+    "show_on_all_tabs": true
+  },
+  "default_browser_setting_enabled": false,
+  "browser": {
+    "check_default_browser": false,
+    "show_home_button": true
+  },
+  "distribution": {
+    "import_bookmarks": false,
+    "import_history": false,
+    "import_home_page": false,
+    "import_search_engine": false,
+    "make_chrome_default": false,
+    "make_chrome_default_for_user": false,
+    "do_not_create_desktop_shortcut": true,
+    "show_welcome_page": false,
+    "skip_first_run_ui": true
+  },
+  "search": {
+    "default_search_provider": {
+      "name": "DuckDuckGo",
+      "keyword": "duckduckgo.com",
+      "search_url": "https://duckduckgo.com/?q={searchTerms}",
+      "suggest_url": "https://duckduckgo.com/ac/?q={searchTerms}&type=list"
+    }
+  }
+}

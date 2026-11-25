@@ -1,0 +1,6 @@
+#!/bin/sh
+# Launcher for the live-session installer entry points.
+# Ensures DISPLAY + root can draw, then starts the installer via pkexec.
+export DISPLAY="${DISPLAY:-:0}"
+xhost +si:localuser:root >/dev/null 2>&1
+exec pkexec /usr/local/bin/bravos-installer

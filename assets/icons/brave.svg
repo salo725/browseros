@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Browser: shield-lion badge -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF7A45"/>
+      <stop offset="1" stop-color="#F04E23"/>
+    </linearGradient>
+  </defs>
+  <circle cx="24" cy="24" r="20" fill="url(#bg)"/>
+  <path d="M24 12 L33 16 L33 24 C33 30.5 29.5 34.5 24 37 C18.5 34.5 15 30.5 15 24 L15 16 Z" fill="#FFF3EC"/>
+  <path d="M20 22 h8 v3 h-8 Z M21 27 h6 v3 h-6 Z" fill="#F04E23"/>
+</svg>

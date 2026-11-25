@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- BraveOS brand mark: lion shield -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF6E3D"/>
+      <stop offset="1" stop-color="#F04E23"/>
+    </linearGradient>
+  </defs>
+  <path d="M24 3 L40 9 L40 24 C40 34 33 41.5 24 45 C15 41.5 8 34 8 24 L8 9 Z" fill="url(#g)"/>
+  <path d="M24 10 L30 14 L28 18 L24 16 L20 18 L18 14 Z" fill="#7A2410"/>
+  <path d="M15 20 L24 28 L33 20 L30 32 L24 36 L18 32 Z" fill="#FFE1CF"/>
+  <circle cx="20" cy="22" r="1.6" fill="#7A2410"/>
+  <circle cx="28" cy="22" r="1.6" fill="#7A2410"/>
+</svg>

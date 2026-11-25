@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="BraveOS">
+    <item label="Brave Browser">
+      <action name="Execute"><command>brave</command></action>
+    </item>
+    <separator/>
+    <item label="Files">
+      <action name="Execute"><command>pcmanfm</command></action>
+    </item>
+    <item label="BraveOS Settings">
+      <action name="Execute"><command>bravos-settings</command></action>
+    </item>
+    <separator/>
+    <item label="Install BraveOS to Disk">
+      <action name="Execute"><command>pkexec /usr/local/bin/bravos-installer</command></action>
+    </item>
+    <separator/>
+    <item label="Terminal (debug)">
+      <action name="Execute"><command>xterm</command></action>
+    </item>
+    <separator/>
+    <item label="Restart Session">
+      <action name="Restart"/>
+    </item>
+    <item label="Reboot">
+      <action name="Execute"><command>systemctl reboot</command></action>
+    </item>
+    <item label="Power Off">
+      <action name="Execute"><command>systemctl poweroff</command></action>
+    </item>
+  </menu>
+  <menu id="client-menu">
+    <item label="Maximize / Restore">
+      <action name="ToggleMaximize"/>
+    </item>
+    <item label="Always on Top">
+      <action name="ToggleOmnipresent"/>
+    </item>
+    <separator/>
+    <item label="Close">
+      <action name="Close"/>
+    </item>
+  </menu>
+</openbox_menu>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+GenericName=File Manager
+Comment=Browse files and folders
+Exec=pcmanfm
+Icon=/usr/share/bravos/icons/icon-folder.png
+Categories=Utility;FileManager;
+Terminal=false

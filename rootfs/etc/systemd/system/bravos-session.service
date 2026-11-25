@@ -1,0 +1,21 @@
+[Unit]
+Description=BraveOS graphical session (X + Openbox)
+Conflicts=getty@tty1.service
+After=getty@tty1.service systemd-user-sessions.service network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=brave
+Group=brave
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=no
+TTYVHangup=yes
+ExecStartPre=+/bin/sh -c 'echo bravos-session-starting > /dev/kmsg'
+ExecStart=/usr/local/bin/bravos-session
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target

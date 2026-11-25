@@ -1,0 +1,110 @@
+name: Build BraveOS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create a GitHub release with the ISO attached'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ISO
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap squashfs-tools xorriso grub-pc-bin grub-common \
+            grub2-common grub-efi-amd64-bin mtools librsvg2-bin curl \
+            ca-certificates gnupg python3-pil
+          sudo mkdir -p /mnt/bravos-build
+
+      - name: Generate assets
+        run: python3 scripts/gen_assets.py
+
+      - name: Build the ISO
+        run: sudo -E bash build.sh
+        env:
+          BRAVOS_BUILD_DIR: /mnt/bravos-build
+
+      - name: Show build summary
+        run: |
+          ls -lh /mnt/bravos-build/output/
+          cat /mnt/bravos-build/output/SHA256SUMS
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: braveos-iso
+          path: |
+            /mnt/bravos-build/output/*.iso
+            /mnt/bravos-build/output/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create GitHub release (tag or manual trigger)
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(cat VERSION)
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "BraveOS ${VERSION}" \
+              --notes "Bootable ISO of BraveOS ${VERSION} (unofficial Brave-browser-centered Linux distribution). Boot via USB/DVD; UEFI machines must disable Secure Boot for v1. See README for details."
+          fi
+          gh release upload "$TAG" /mnt/bravos-build/output/*.iso /mnt/bravos-build/output/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  smoke-test:
+    name: QEMU smoke test
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 python3-pip
+          pip3 install --quiet pexpect pillow
+          ls -l /dev/kvm || echo "NO KVM - falling back to TCG"
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: braveos-iso
+          path: iso/
+
+      - name: Boot test in QEMU
+        run: python3 scripts/smoke_test.py iso/*.iso
+
+      - name: Upload test evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: braveos-test-evidence
+          path: |
+            ci/serial-log.txt
+            ci/ram-report.txt
+            ci/screenshot-*.png
+          retention-days: 30
+          if-no-files-found: warn

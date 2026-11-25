@@ -1,0 +1,15 @@
+#!/bin/bash
+# Brave launcher wrapper.
+# Applies system-level (/etc/bravos/brave.flags) and user-level
+# (~/.config/bravos/brave.flags) flags on top of any command-line flags.
+set -u
+FLAGS=""
+for f in /etc/bravos/brave.flags "$HOME/.config/bravos/brave.flags"; do
+  if [ -r "$f" ]; then
+    while IFS= read -r line; do
+      case "$line" in ''|\#*) continue ;; esac
+      FLAGS="$FLAGS $line"
+    done < "$f"
+  fi
+done
+exec /usr/bin/brave-browser-stable $FLAGS "$@"

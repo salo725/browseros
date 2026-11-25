@@ -1,0 +1,11 @@
+[Unit]
+Description=BraveOS resource tuning (reserve RAM for the browser)
+ConditionPathExists=!/run/bravos-tuned
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo "bravos-tuning: applying sysctl + zram" > /dev/kmsg; test -x /usr/sbin/zramswap && zramswap start || true; mkdir -p /run && touch /run/bravos-tuned'
+
+[Install]
+WantedBy=multi-user.target

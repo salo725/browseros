@@ -1,0 +1,42 @@
+#!/bin/bash
+# BraveOS graphical session launcher (runs as user 'brave' via systemd).
+# Starts X on vt1, then an Openbox session; logs to the runtime dir.
+set -u
+
+RD="${XDG_RUNTIME_DIR:-/tmp}"
+LOG="$RD/bravos-session.log"
+exec > "$LOG" 2>&1
+
+echo "bravos-session: starting at $(date)"
+
+# Session environment
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=BRAVEOS
+export DESKTOP_SESSION=bravos
+
+# Start X on vt1
+Xorg :0 vt1 -nolisten tcp -novtswitch -logfile "$RD/xorg.log" &
+XORG_PID=$!
+echo "bravos-session: Xorg pid $XORG_PID"
+
+for i in $(seq 1 30); do
+  [ -S /tmp/.X11-unix/X0 ] && break
+  sleep 0.5
+done
+if [ ! -S /tmp/.X11-unix/X0 ]; then
+  echo "bravos-session: X failed to start; falling back to console login"
+  touch "$RD/session-failed"
+  exit 1
+fi
+export DISPLAY=:0
+echo "bravos-session: X socket ready"
+
+# Session bus
+if command -v dbus-launch >/dev/null 2>&1; then
+  eval "$(dbus-launch --sh-syntax --exit-with-session)"
+  export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
+fi
+
+echo "bravos-session: launching openbox session"
+touch "$RD/session-ready"
+exec openbox-session

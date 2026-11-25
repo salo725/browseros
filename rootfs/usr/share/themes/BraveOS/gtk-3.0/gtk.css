@@ -1,0 +1,121 @@
+/* BraveOS GTK3 theme - dark, brand-orange accents, rounded windows */
+
+@define-color accent #f04e23;
+@define-color accent_hi #ff7a45;
+@define-color bg_dark #1d1d20;
+@define-color bg_darker #141416;
+@define-color fg_light #ececee;
+
+* {
+  outline-color: alpha(@accent_hi, 0.6);
+}
+
+window, dialog, menu {
+  background-color: @bg_dark;
+  color: @fg_light;
+  border-radius: 10px;
+}
+
+headerbar, .titlebar {
+  background: linear-gradient(to bottom, #2a2a2e, #202024);
+  color: @fg_light;
+  border-bottom: 1px solid #34343a;
+  border-radius: 10px 10px 0 0;
+  padding: 6px 10px;
+}
+
+headerbar button.titlebutton {
+  background: transparent;
+  color: @accent_hi;
+  border: none;
+  border-radius: 50%;
+  padding: 2px;
+}
+headerbar button.titlebutton:hover { background: @accent; color: white; }
+
+button {
+  background: linear-gradient(to bottom, #323236, #2a2a2e);
+  color: @fg_light;
+  border: 1px solid #3c3c42;
+  border-radius: 8px;
+  padding: 7px 14px;
+}
+button:hover {
+  border-color: @accent_hi;
+  color: white;
+}
+button:active { background: @accent; color: white; }
+button.suggested-action {
+  background: linear-gradient(to bottom, @accent_hi, @accent);
+  color: white;
+  border-color: @accent;
+  font-weight: bold;
+}
+button.destructive-action { background: #a83226; color: white; }
+
+entry, spinbutton, combobox entry {
+  background: #26262a;
+  color: @fg_light;
+  border: 1px solid #3c3c42;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+entry:focus { border-color: @accent; }
+
+checkbutton, radiobutton { color: @fg_light; }
+checkbutton check, radiobutton radio {
+  border: 1px solid @accent_hi;
+  background: #26262a;
+}
+
+switch { color: @fg_light; }
+switch:checked { background: @accent; }
+switch slider { background: #45454a; }
+
+list, listbox {
+  background: @bg_darker;
+  color: @fg_light;
+}
+list row { padding: 9px 12px; }
+list row:selected { background: @accent; color: white; }
+list row:hover:not(:selected) { background: #2a2a2e; }
+
+sidebar, .sidebar {
+  background: @bg_darker;
+  color: @fg_light;
+}
+sidebar row, .sidebar row { padding: 10px 14px; }
+sidebar row:selected, .sidebar row:selected { background: @accent; }
+
+label { color: inherit; }
+.dim-label { opacity: 0.7; }
+
+progressbar progress {
+  background: linear-gradient(to right, @accent_hi, @accent);
+  border-radius: 6px;
+  min-height: 10px;
+}
+progressbar trough {
+  background: #2a2a2e;
+  border-radius: 6px;
+  min-height: 10px;
+}
+
+scale slider {
+  background: @accent_hi;
+  border-radius: 50%;
+  min-width: 16px;
+  min-height: 16px;
+}
+scale trough { background: #2a2a2e; }
+scale highlight { background: @accent; }
+
+scrollbar slider { background: #45454a; border-radius: 8px; }
+scrollbar { background: transparent; }
+
+tooltip {
+  background: #101012;
+  color: @fg_light;
+  border: 1px solid @accent;
+  border-radius: 8px;
+}

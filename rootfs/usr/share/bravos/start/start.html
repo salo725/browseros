@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BraveOS Start</title>
+<style>
+  :root { --accent:#f04e23; --accent-hi:#ff7a45; --bg:#141416; --card:#1f1f23; --fg:#ececee; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    min-height:100vh; background:radial-gradient(1200px 700px at 80% 110%, #35201a 0%, var(--bg) 55%);
+    color:var(--fg); font-family:'DejaVu Sans','Liberation Sans',Arial,sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px;
+  }
+  .mark { width:64px; height:64px; margin-bottom:12px;
+    background:linear-gradient(180deg,#ff7a45,#f04e23); border-radius:18px;
+    display:flex; align-items:center; justify-content:center; font-size:34px; color:#fff3ec; }
+  h1 { font-size:22px; font-weight:600; letter-spacing:.5px; }
+  .sub { color:#9a9aa0; font-size:12px; margin-top:4px; margin-bottom:26px; }
+  .clock { font-size:clamp(28px,6vw,44px); font-weight:300; color:var(--accent-hi); margin-bottom:26px; }
+  .search { width:min(560px,92vw); display:flex; margin-bottom:30px; }
+  .search input {
+    flex:1; background:var(--card); color:var(--fg); border:1px solid #33333a;
+    border-radius:12px 0 0 12px; padding:14px 18px; font-size:15px; outline:none;
+  }
+  .search input:focus { border-color:var(--accent); }
+  .search button {
+    background:linear-gradient(180deg,var(--accent-hi),var(--accent)); color:#fff; border:none;
+    border-radius:0 12px 12px 0; padding:0 22px; font-size:15px; cursor:pointer;
+  }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:12px; width:min(560px,92vw); }
+  .tile {
+    background:var(--card); border:1px solid #2c2c33; border-radius:12px; padding:14px 8px;
+    text-align:center; text-decoration:none; color:var(--fg); font-size:12px; transition:transform .15s, border-color .15s;
+  }
+  .tile:hover { transform:translateY(-3px); border-color:var(--accent); }
+  .tile .t { font-size:22px; margin-bottom:6px; }
+  footer { margin-top:36px; font-size:11px; color:#7a7a80; }
+</style>
+</head>
+<body>
+  <div class="mark">&#9673;</div>
+  <h1>BraveOS</h1>
+  <div class="sub">The Brave Browser Distribution &middot; unofficial</div>
+  <div class="clock" id="clock">--:--</div>
+  <form class="search" action="https://duckduckgo.com/" method="get">
+    <input name="q" placeholder="Search the web with DuckDuckGo&hellip;" autocomplete="off" autofocus>
+    <button type="submit">Search</button>
+  </form>
+  <div class="tiles">
+    <a class="tile" href="https://duckduckgo.com"><div class="t">&#128269;</div>DuckDuckGo</a>
+    <a class="tile" href="https://github.com"><div class="t">&#128187;</div>GitHub</a>
+    <a class="tile" href="https://www.wikipedia.org"><div class="t">&#128218;</div>Wikipedia</a>
+    <a class="tile" href="https://www.youtube.com"><div class="t">&#9654;</div>YouTube</a>
+    <a class="tile" href="https://brave.com"><div class="t">&#128681;</div>Brave</a>
+    <a class="tile" href="https://mail.google.com"><div class="t">&#9993;</div>Mail</a>
+  </div>
+  <footer>privacy-focused &middot; resource-efficient &middot; <span id="date"></span></footer>
+  <script>
+    function tick(){var d=new Date();
+      document.getElementById('clock').textContent=d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+      document.getElementById('date').textContent=d.toDateString();}
+    tick(); setInterval(tick,10000);
+  </script>
+</body>
+</html>

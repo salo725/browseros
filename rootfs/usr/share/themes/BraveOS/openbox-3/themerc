@@ -1,0 +1,60 @@
+# BraveOS Openbox window theme
+# flat dark frames, brand-orange active titlebar
+
+border.width: 1
+window.handle.width: 0
+
+window.active.border.color: #131316
+window.inactive.border.color: #131316
+
+window.active.title.bg: flat solid #1a1a1c
+window.active.title.separator.color: #1a1a1c
+window.active.title.justify: center
+window.active.label.text.color: #ffffff
+
+window.active.label.bg: parentrelative
+window.active.handle.bg: flat solid #1a1a1c
+window.active.grip.bg: flat solid #1a1a1c
+
+window.active.button.unpressed.bg: parentrelative
+window.active.button.unpressed.image.color: #ff7a45
+window.active.button.hover.bg: flat solid #f04e23
+window.active.button.hover.image.color: #ffffff
+window.active.button.pressed.bg: flat solid #c23c17
+window.active.button.pressed.image.color: #ffffff
+window.active.button.disabled.bg: parentrelative
+window.active.button.disabled.image.color: #5a5a5e
+
+window.inactive.title.bg: flat solid #141416
+window.inactive.label.text.color: #8a8a8e
+window.inactive.label.bg: parentrelative
+window.inactive.button.unpressed.bg: parentrelative
+window.inactive.button.unpressed.image.color: #6a6a6e
+window.inactive.button.hover.bg: flat solid #26262a
+window.inactive.button.hover.image.color: #bbbbbb
+window.inactive.button.pressed.bg: flat solid #26262a
+window.inactive.button.pressed.image.color: #ffffff
+window.inactive.button.disabled.bg: parentrelative
+window.inactive.button.disabled.image.color: #454548
+
+menu.border.width: 1
+menu.border.color: #131316
+menu.overlap: 2
+menu.overlap.x: -6
+
+menu.title.bg: flat solid #1a1a1c
+menu.title.text.color: #ff7a45
+menu.title.justify: left
+menu.items.bg: flat solid #202023
+menu.items.text.color: #e8e8ea
+menu.items.disabled.text.color: #6a6a6e
+menu.items.active.bg: flat solid #f04e23
+menu.items.active.text.color: #ffffff
+menu.separator.color: #34343a
+menu.items.font: DejaVu Sans 10
+
+osd.bg: flat solid #1a1a1c
+osd.border.color: #f04e23
+osd.label.text.color: #ffffff
+osd.hilight.bg: flat solid #f04e23
+osd.unhilight.bg: flat solid #333338

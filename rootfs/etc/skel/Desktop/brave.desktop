@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Brave Browser
+Exec=brave --maximized --no-first-run
+Icon=/usr/share/bravos/icons/icon-brave.png
+Terminal=false

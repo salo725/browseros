@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install BraveOS
+Comment=Install BraveOS from this live session onto the disk
+Exec=bravos-live-install
+Icon=/usr/share/bravos/icons/icon-installer.png
+Terminal=false

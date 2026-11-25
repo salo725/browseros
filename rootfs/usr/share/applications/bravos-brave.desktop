@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Brave Browser
+GenericName=Web Browser
+Comment=The heart of BraveOS
+Exec=brave --maximized --no-first-run
+Icon=/usr/share/bravos/icons/icon-brave.png
+Categories=Network;WebBrowser;
+Terminal=false
+StartupWMClass=Brave-browser

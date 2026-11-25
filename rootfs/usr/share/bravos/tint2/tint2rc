@@ -1,0 +1,78 @@
+# BraveOS tint2 panel: top bar, dark glass, brand launchers
+background = 0
+rounded = 8
+border_width = 0
+background_color = #1a1a1c 85
+border_color = #000000 0
+
+background = 1
+rounded = 6
+border_width = 1
+background_color = #f04e23 100
+border_color = #ff7a45 100
+
+# panel
+panel_items = LTSC
+panel_size = 100% 34
+panel_margin = 0 0 0
+panel_padding = 4 2 4
+panel_position = top center horizontal
+panel_layer = top
+panel_window_name = bravos-panel
+panel_background_id = 0
+wm_menu = 1
+panel_dock = 0
+panel_shrink = 0
+
+# launchers
+launcher_background_id = 0
+launcher_icon_theme = hicolor
+launcher_padding = 1 1 2
+launcher_icon_size = 22
+launcher_item_app = /usr/share/applications/bravos-brave.desktop
+launcher_item_app = /usr/share/applications/bravos-files.desktop
+launcher_item_app = /usr/share/applications/bravos-settings.desktop
+launcher_item_app = /usr/share/applications/bravos-installer.desktop
+
+# taskbar
+taskbar_mode = single_desktop
+taskbar_padding = 2 2 2
+taskbar_background_id = 0
+taskbar_name = 1
+taskbar_hide_inactive_tasks = 0
+taskbar_sort_order = center
+
+# tasks
+task_text = 1
+task_icon = 1
+task_centered = 1
+task_padding = 4 3
+task_font = DejaVu Sans 9
+task_font_color = #e8e8ea 100
+task_active_font_color = #ffffff 100
+task_background_id = 0
+task_active_background_id = 1
+task_maximum_size = 220
+
+# systray
+systray_padding = 2 2 2
+systray_background_id = 0
+systray_sort = descending
+systray_icon_size = 20
+systray_icon_asb = 70 0 -10
+
+# clock
+clock_font_color = #ff9a68 100
+clock_padding = 4 2
+clock_background_id = 0
+clock_rclick_command = bravos-settings
+time1_format = %H:%M
+time1_font = DejaVu Sans Bold 9
+time2_format = %a %d %b
+time2_font = DejaVu Sans 7
+
+# launcher tooltip / behavior
+tooltip_padding = 4 4
+tooltip_show_timeout = 0.4
+tooltip_background_id = 0
+tooltip_font = DejaVu Sans 8

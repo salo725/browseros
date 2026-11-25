@@ -1,0 +1,666 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""BraveOS Settings - custom control center for the Brave Browser Distribution.
+
+Pages: About, Appearance, Display, Network, Sound, Brave, Memory & Storage,
+Power. All actions use real system backends (xrandr, nmcli, pactl, sysfs).
+Run with --selftest (on a display) to exercise every page builder and print
+SELTEST-PASS/SELTEST-FAIL lines for CI.
+"""
+import os
+import subprocess
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Gdk, GLib
+
+ACCENT = "#f04e23"
+
+PAGES = [
+    ("about",    "About BraveOS",    "&#9673;"),
+    ("display",  "Display",          "&#9635;"),
+    ("network",  "Network",          "&#8986;"),
+    ("sound",    "Sound",            "&#9835;"),
+    ("brave",    "Brave Browser",    "&#9679;"),
+    ("memory",   "Memory & Storage", "&#9209;"),
+    ("power",    "Power & Tuning",   "&#9889;"),
+    ("session",  "Live Session",     "&#9636;"),
+]
+
+
+def run(cmd, timeout=15):
+    """Run a command, return stdout or None on failure."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.stdout if p.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def page_title(parent_vbox, title, subtitle=""):
+    h = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    t = Gtk.Label(xalign=0)
+    t.set_markup("<span size='x-large' weight='bold'>%s</span>" % title)
+    h.pack_start(t, False, False, 0)
+    if subtitle:
+        s = Gtk.Label(xalign=0)
+        s.get_style_context().add_class("dim-label")
+        s.set_markup("<span size='small'>%s</span>" % subtitle)
+        h.pack_start(s, False, False, 2)
+    parent_vbox.pack_start(h, False, False, 8)
+    parent_vbox.pack_start(Gtk.Separator(), False, False, 0)
+
+
+def row(vbox, name, desc=""):
+    b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    b.set_margin_top(8)
+    b.set_margin_bottom(8)
+    lab = Gtk.Label(xalign=0)
+    lab.set_markup("<b>%s</b>%s" % (name, ("<span size='small'>  %s</span>" % desc) if desc else ""))
+    b.pack_start(lab, True, True, 0)
+    vbox.pack_start(b, False, False, 0)
+    return b
+
+
+def card():
+    c = Gtk.Frame()
+    c.set_margin_top(10)
+    v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    v.set_margin_left(14)
+    v.set_margin_right(14)
+    v.set_margin_top(8)
+    v.set_margin_bottom(10)
+    c.add(v)
+    return c, v
+
+
+def info_kv(kv):
+    out = []
+    for k, v in kv:
+        out.append("<b>%s:</b>  %s" % (k, GLib.markup_escape_text(v or "-")))
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------- page builders
+
+def build_about(win, page):
+    page_title(page, "About BraveOS", "The Brave Browser Distribution (unofficial)")
+    c, v = card()
+    ver = open("/usr/share/bravos/VERSION").read().strip() if os.path.exists("/usr/share/bravos/VERSION") else "1.0.0"
+    kv = [("Version", "BraveOS %s «Lion»" % ver),
+          ("Kernel", run(["uname", "-r"]) or "-"),
+          ("Session", "X11 + Openbox + picom"),
+          ("Browser", "Brave (official build)")]
+
+    # RAM figure from MemAvailable
+    mem = "-"
+    mi = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for ln in f:
+                k, rest = ln.split(":", 1)
+                mi[k] = int(rest.split()[0])
+        used = mi["MemTotal"] - mi["MemAvailable"]
+        mem = "%d MB used of %d MB (idle target ≤ 200 MB)" % (used, mi["MemTotal"] // 1024)
+    except (OSError, ValueError, KeyError):
+        pass
+    kv.append(("Idle memory", mem))
+    gpu = run(["sh", "-c", "lspci 2>/dev/null | grep -Ei 'vga|3d' | head -2 | cut -c9-"]) or ""
+    kv.append(("Graphics", gpu.replace("\n", " / ").strip() or "-"))
+
+    lab = Gtk.Label(xalign=0)
+    lab.set_markup(info_kv(kv))
+    v.pack_start(lab, False, False, 6)
+    page.pack_start(c, False, False, 0)
+
+    b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    btn = Gtk.Button(label="Open Brave")
+    btn.get_style_context().add_class("suggested-action")
+    btn.connect("clicked", lambda *_: subprocess.Popen(["brave", "--no-first-run"],
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    lic = Gtk.Label(xalign=0)
+    lic.set_markup("<span size='small'>Brave® is a trademark of Brave Software Inc. "
+                   "BraveOS is an unofficial community distribution.</span>")
+    b.pack_start(btn, False, False, 4)
+    b.pack_end(lic, False, False, 4)
+    page.pack_start(b, False, False, 14)
+
+
+def build_display(win, page):
+    page_title(page, "Display", "Resolutions and screen brightness")
+
+    c, v = card()
+    rr = page._bravos_modes = []
+    out = run(["xrandr", "--current"])
+    combo = Gtk.ComboBoxText()
+    combo.set_margin_top(6)
+    if out:
+        # collect (resolution) of connected outputs
+        cur_out = None
+        for ln in out.splitlines():
+            if " connected" in ln:
+                cur_out = ln.split()[0]
+            elif cur_out and ln.strip().startswith(tuple("0123456789")):
+                parts = ln.split()[0]
+                rr.append(parts)
+        for m in rr:
+            combo.append_text(m)
+    hbox = row(v, "Resolution", "applies immediately via xrandr")
+    hbox.pack_start(combo, False, False, 6)
+    page._bravos_res_combo = combo
+
+    def apply_res(btn):
+        m = combo.get_active_text()
+        out2 = run(["xrandr", "--current"])
+        if not (m and out2):
+            return
+        disp = None
+        for ln in out2.splitlines():
+            if " connected" in ln:
+                disp = ln.split()[0]
+                break
+        if disp:
+            run(["xrandr", "--output", disp, "--mode", m])
+            win.show_toast("Resolution: %s" % m)
+    ab = Gtk.Button(label="Apply")
+    ab.get_style_context().add_class("suggested-action")
+    ab.connect("clicked", apply_res)
+    hbox.pack_start(ab, False, False, 0)
+    page.pack_start(c, False, False, 0)
+
+    # brightness (backlight)
+    c2, v2 = card()
+    backs = [d for d in ("intel_backlight", "amdgpu_bl0", "acpi_video0", "backlight")
+             if os.path.exists("/sys/class/backlight/%s/brightness" % d)] \
+        or ([os.listdir("/sys/class/backlight")[0]] if os.path.isdir("/sys/class/backlight")
+            and os.listdir("/sys/class/backlight") else [])
+    if backs:
+        dev = backs[0]
+        page._bravos_bl = dev
+
+        def try_write(vf, val):
+            try:
+                cur = int(open(vf).read())
+                return cur
+            except (OSError, ValueError):
+                return None
+        bname = "/sys/class/backlight/%s" % dev
+        cur = try_write(bname + "/brightness", 0) or 0
+        mx = try_write(bname + "/max_brightness", 0) or 1
+        sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, mx, 1)
+        sc.set_value(cur)
+        sc.set_hexpand(True)
+        sc.set_size_request(220, -1)
+        hb = row(v2, "Backlight", dev)
+
+        def moved(s):
+            val = int(s.get_value())
+            subprocess.Popen(["sh", "-c", "echo %d > /sys/class/backlight/%s/brightness"
+                              % (val, dev)], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        sc.connect("value-changed", moved)
+        hb.pack_start(sc, True, True, 6)
+    else:
+        hb = row(v2, "Backlight", "no backlight device found on this machine")
+    page.pack_start(c2, False, False, 0)
+
+    c3, v3 = card()
+    hb3 = row(v3, "Compositor animations", "shadows + fades (picom)")
+
+    def toggle_anim(sw, state):
+        ok = run(["pkill", "-HUP", "picom"]) is not None
+        if state:
+            subprocess.Popen(["picom", "--config", "/usr/share/bravos/picom/picom.conf", "-b"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            run(["pkill", "picom"])
+        win.show_toast("Animations %s" % ("on" if state else "off"))
+    sw = Gtk.Switch()
+    sw.set_active(run(["pgrep", "-x", "picom"]) is not None)
+    sw.connect("state-set", toggle_anim)
+    hb3.pack_start(sw, False, False, 0)
+    page.pack_start(c3, False, False, 0)
+
+
+def build_network(win, page):
+    page_title(page, "Network", "NetworkManager status and connections")
+    page._bravos_net_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+    c, v = card()
+    v.pack_start(page._bravos_net_list, False, False, 4)
+
+    def refresh(btn=None):
+        for ch in page._bravos_net_list.get_children():
+            page._bravos_net_list.remove(ch)
+        out = run(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show"])
+        if out:
+            for ln in out.strip().splitlines()[:8]:
+                parts = ln.split(":")
+                name = parts[0] if parts else ln
+                st = "up" if "activated" in ln.lower() else ""
+                lb = Gtk.Label(xalign=0)
+                lb.set_markup(("● <b>%s</b> <span size='small'>(active)</span>" % name)
+                              if st else "○ %s" % name)
+                page._bravos_net_list.pack_start(lb, False, False, 2)
+        else:
+            page._bravos_net_list.pack_start(
+                Gtk.Label(label="nmcli unavailable"), False, False, 2)
+        page._bravos_net_list.show_all()
+
+    hb = row(v, "Connections")
+    rb = Gtk.Button(label="Refresh")
+    rb.connect("clicked", refresh)
+    hb.pack_start(rb, False, False, 0)
+    page.pack_start(c, False, False, 0)
+
+    c2, v2 = card()
+    hb2 = row(v2, "Wi-Fi radio")
+    sw = Gtk.Switch()
+    sw.set_active(run(["sh", "-c", "nmcli radio wifi"]) == "enabled\n")
+
+    def wifi_toggle(sw, state):
+        run(["nmcli", "radio", "wifi", "on" if state else "off"])
+        win.show_toast("Wi-Fi %s" % ("enabled" if state else "disabled"))
+        return False
+    sw.connect("state-set", wifi_toggle)
+    hb2.pack_start(sw, False, False, 0)
+    page.pack_start(c2, False, False, 0)
+
+    c3, v3 = card()
+    hb3 = row(v3, "Open network editor", "nmtui in a terminal window")
+    nb = Gtk.Button(label="Open nmtui")
+    nb.connect("clicked", lambda *_: subprocess.Popen(
+        ["xterm", "-title", "Network settings", "-e", "nmtui"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    hb3.pack_start(nb, False, False, 0)
+    page.pack_start(c3, False, False, 0)
+    refresh()
+
+
+def build_sound(win, page):
+    page_title(page, "Sound", "PulseAudio output volume")
+
+    c, v = card()
+    hb = row(v, "Output volume")
+
+    vol = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+    vol.set_size_request(240, -1)
+    out = run(["pactl", "get-sink-volume", "@DEFAULT_SINK@"])
+    if out:
+        try:
+            pct = int(out.split("/")[0].strip().rstrip("%").strip().split(" ")[-1])
+            vol.set_value(pct)
+        except (ValueError, IndexError):
+            pass
+    page._bravos_vol = vol
+
+    def apply_vol(s):
+        val = int(s.get_value())
+        subprocess.Popen(["pactl", "set-sink-volume", "@DEFAULT_SINK@", "%d%%" % val],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    vol.connect("value-changed", apply_vol)
+    hb.pack_start(vol, True, True, 6)
+
+    mute = Gtk.Switch()
+    swout = run(["pactl", "get-sink-mute", "@DEFAULT_SINK@"]) or ""
+    mute.set_active("yes" in swout)
+
+    def do_mute(sw, state):
+        subprocess.Popen(["pactl", "set-sink-mute", "@DEFAULT_SINK@",
+                          "1" if state else "0"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return False
+    mute.connect("state-set", do_mute)
+    mute.set_tooltip_text("Mute")
+    hb.pack_start(mute, False, False, 4)
+    page.pack_start(c, False, False, 0)
+
+    c2, v2 = card()
+    hb2 = row(v2, "Audio device", "alsamixer in a terminal for advanced control")
+    pb = Gtk.Button(label="Open alsamixer")
+    pb.connect("clicked", lambda *_: subprocess.Popen(
+        ["xterm", "-title", "alsamixer", "-e", "alsamixer"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    hb2.pack_start(pb, False, False, 0)
+    page.pack_start(c2, False, False, 0)
+
+
+def build_brave(win, page):
+    page_title(page, "Brave Browser", "flags, cache and defaults for the core app")
+
+    c, v = card()
+    page._bravos_flags_path = os.path.expanduser("~/.config/bravos/brave.flags")
+    page._bravos_hw = Gtk.Switch()
+    page._bravos_kiosk = Gtk.Switch()
+    page._bravos_cache = Gtk.Switch()
+
+    flags = ""
+    if os.path.exists(page._bravos_flags_path):
+        flags = open(page._bravos_flags_path).read()
+
+    def flags_text():
+        lines = []
+        if not page._bravos_hw.get_active():
+            lines.append("--disable-gpu")
+        if page._bravos_kiosk.get_active():
+            lines.append("--kiosk")
+        if page._bravos_cache.get_active():
+            lines.append("--disk-cache-size=1")
+        return "\n".join(lines)
+
+    def save_flags():
+        d = os.path.dirname(page._bravos_flags_path)
+        os.makedirs(d, exist_ok=True)
+        open(page._bravos_flags_path, "w").write(flags_text())
+
+    def mk_toggle(name, desc, flag_on, flag_off=None):
+        hb = row(v, name, desc)
+        sw = Gtk.Switch()
+        active = (flag_off is not None and flag_off not in flags) if flag_off \
+            else (flag_on in flags)
+        sw.set_active(active)
+
+        def on_toggle(s, state):
+            save_flags()
+            win.show_toast("Saved. Restart Brave to apply.")
+            return False
+        sw.connect("state-set", on_toggle)
+        hb.pack_start(sw, False, False, 0)
+        return sw
+
+    page._bravos_hw = mk_toggle("Hardware acceleration",
+                                "off = software rendering (stable on old GPUs)",
+                                "", "--disable-gpu")
+    page._bravos_kiosk = mk_toggle("Kiosk mode", "Brave fullscreen, no chrome",
+                                   "--kiosk")
+    page._bravos_cache = mk_toggle("Minimal cache", "keep cache in RAM only",
+                                   "--disk-cache-size=1")
+    page.pack_start(c, False, False, 0)
+
+    c2, v2 = card()
+    hb2 = row(v2, "Clear browser cache", "frees disk space; keeps passwords")
+
+    def clear_cache(btn):
+        subprocess.Popen(["sh", "-c",
+                          "rm -rf ~/.cache/brave-browser* 2>/dev/null; "
+                          "rm -rf ~/.config/brave-browser*/Default/Cache* 2>/dev/null"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        win.show_toast("Cache cleared")
+    cb = Gtk.Button(label="Clear")
+    cb.get_style_context().add_class("destructive-action")
+    cb.connect("clicked", clear_cache)
+    hb2.pack_start(cb, False, False, 0)
+    page.pack_start(c2, False, False, 0)
+
+    c3, v3 = card()
+    hb3 = row(v3, "Default browser", "xdg-settings")
+
+    def set_default(btn):
+        run(["xdg-settings", "set", "default-web-browser",
+             "bravos-brave.desktop"])
+        win.show_toast("Brave is now the default browser")
+    db = Gtk.Button(label="Set Brave as default")
+    db.get_style_context().add_class("suggested-action")
+    db.connect("clicked", set_default)
+    hb3.pack_start(db, False, False, 0)
+    page.pack_start(c3, False, False, 0)
+
+
+def build_memory(win, page):
+    page_title(page, "Memory & Storage", "what the OS uses vs what Brave gets")
+
+    c, v = card()
+    lab = Gtk.Label(xalign=0)
+    lab.set_margin_top(6)
+    page._bravos_mem_lab = lab
+
+    def refresh_mem(btn=None):
+        mi = {}
+        try:
+            with open("/proc/meminfo") as f:
+                for ln in f:
+                    k, rest = ln.split(":", 1)
+                    mi[k] = int(rest.split()[0])
+            total, avail = mi["MemTotal"], mi["MemAvailable"]
+            used = total - avail
+            pct = 100.0 * used / total
+            free_os = avail / 1024.0
+            lab.set_markup(
+                "<b>OS using %d MB (%.1f%%)</b> of %d MB.\n"
+                "<span size='small'>%.0f MB free for Brave right now. "
+                "zram swap: %s.</span>"
+                % (used, pct, total // 1024, free_os,
+                   "on" if run(["sh", "-c", "swapon --show=NAME --noheadings "
+                                "| grep -q zram"]) else "off"))
+        except (OSError, ValueError, KeyError):
+            lab.set_text("meminfo unavailable")
+        out = run(["df", "-h", "/", "/tmp"])
+        if out:
+            dfm = Gtk.Label(xalign=0)
+            dfm.set_markup("<tt>%s</tt>" % GLib.markup_escape_text(out.strip()))
+            dfm.set_margin_top(8)
+            for ch in page._bravos_dfbox.get_children():
+                page._bravos_dfbox.remove(ch)
+            page._bravos_dfbox.pack_start(dfm, False, False, 0)
+            page._bravos_dfbox.show_all()
+
+    v.pack_start(lab, False, False, 0)
+    page._bravos_dfbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    v.pack_start(page._bravos_dfbox, False, False, 0)
+    hb = row(v, "Refresh")
+    rb = Gtk.Button(label="Refresh")
+    rb.connect("clicked", refresh_mem)
+    hb.pack_start(rb, False, False, 0)
+    page.pack_start(c, False, False, 0)
+    refresh_mem()
+
+
+def build_power(win, page):
+    page_title(page, "Power & Tuning", "keep every spare byte for the browser")
+
+    c, v = card()
+    sw = Gtk.Switch()
+    swout = run(["sysctl", "-n", "vm.swappiness"]) or ""
+    sw.set_active(swout.strip() in ("10", "10\n"))
+
+    def low_ram(sw, state):
+        if state:
+            run(["sysctl", "-w", "vm.swappiness=10"])
+        else:
+            run(["sysctl", "-w", "vm.swappiness=60"])
+        win.show_toast("Low-RAM mode %s" % ("on" if state else "off"))
+        return False
+    hb = row(v, "Low-RAM mode", "aggressive swappiness (10)")
+    sw.connect("state-set", low_ram)
+    hb.pack_start(sw, False, False, 0)
+    page.pack_start(c, False, False, 0)
+
+    c2, v2 = card()
+    up = run(["uptime", "-p"]) or ""
+    hb2 = row(v2, "Uptime", up.strip())
+    page.pack_start(c2, False, False, 0)
+
+    c3, v3 = card()
+    hb3 = row(v3, "Reboot / Power off")
+
+    def reboot(b):
+        run(["systemctl", "reboot"])
+    def poweroff(b):
+        run(["systemctl", "poweroff"])
+    rb = Gtk.Button(label="Reboot")
+    rb.connect("clicked", reboot)
+    pb = Gtk.Button(label="Power off")
+    pb.get_style_context().add_class("destructive-action")
+    pb.connect("clicked", poweroff)
+    hb3.pack_start(rb, False, False, 0)
+    hb3.pack_start(pb, False, False, 4)
+    page.pack_start(c3, False, False, 0)
+
+
+def build_session(win, page):
+    page_title(page, "Live Session", "try BraveOS without installing")
+
+    c, v = card()
+    live = os.path.isdir("/run/live")
+    hb = row(v, "Running from live USB" if live else "Installed system")
+    page.pack_start(c, False, False, 0)
+
+    c2, v2 = card()
+    hb2 = row(v2, "Install to disk",
+              "guided: erases the chosen disk and installs BraveOS")
+    ib = Gtk.Button(label="Launch installer")
+    ib.get_style_context().add_class("suggested-action")
+    ib.connect("clicked", lambda *_: subprocess.Popen(
+        ["bravos-live-install"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    hb2.pack_start(ib, False, False, 0)
+    page.pack_start(c2, False, False, 0)
+
+
+BUILDERS = {
+    "about":   build_about,
+    "display": build_display,
+    "network": build_network,
+    "sound":   build_sound,
+    "brave":   build_brave,
+    "memory":  build_memory,
+    "power":   build_power,
+    "session": build_session,
+}
+
+
+class SettingsApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="com.bravos.settings")
+        self.win = None
+
+    def do_activate(self):
+        if self.win:
+            self.win.present()
+            return
+        win = Gtk.ApplicationWindow(application=self)
+        win.set_default_size(880, 560)
+        win.set_title("BraveOS Settings")
+
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.set_title("BraveOS Settings")
+        try:
+            header.set_custom_title(Gtk.Image.new_from_file(
+                "/usr/share/bravos/icons/icon-bravos.png"))
+        except Exception:
+            pass
+        win.set_titlebar(header)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        win.add(outer)
+
+        # sidebar
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        side.set_size_request(200, -1)
+        brand = Gtk.Label()
+        brand.set_markup("<span size='large' weight='bold' color='#ff7a45'>BraveOS</span>\n"
+                         "<span size='small'>settings</span>")
+        brand.set_margin_top(16)
+        brand.set_margin_bottom(10)
+        side.pack_start(brand, False, False, 4)
+
+        lst = Gtk.ListBox()
+        lst.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        side.pack_start(lst, True, True, 0)
+        outer.pack_start(side, False, False, 0)
+
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        stack.set_transition_duration(220)
+        outer.pack_start(stack, True, True, 0)
+
+        # pages
+        pages = {}
+        for key, label, glyph in PAGES:
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            page.set_margin_left(22)
+            page.set_margin_right(22)
+            page.set_margin_top(14)
+            pages[key] = page
+            stack.add_titled(page, key, label)
+            lb = Gtk.ListBoxRow()
+            lb._bravos_key = key
+            ibox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            g = Gtk.Label()
+            g.set_markup("<span size='x-large' color='#ff7a45'>%s</span>" % glyph)
+            t = Gtk.Label(label)
+            ibox.pack_start(g, False, False, 10)
+            ibox.pack_start(t, False, False, 0)
+            lb.add(ibox)
+            lst.add(lb)
+
+        toastbar = Gtk.Revealer()
+        tl = Gtk.Label()
+        toastbar.add(tl)
+        toastbar.set_halign(Gtk.Align.CENTER)
+        toastbar.set_valign(Gtk.Align.END)
+        toastbar.set_margin_bottom(18)
+        toastbar.set_reveal_child(False)
+        outer.set_can_focus(True)
+        outer.add(toastbar)
+
+        def show_toast(msg):
+            tl.set_text(msg)
+            toastbar.set_reveal_child(True)
+            GLib.timeout_add(2500, lambda: toastbar.set_reveal_child(False) or False)
+
+        win.show_toast = show_toast
+
+        def on_row_selected(box, lbrow):
+            if lbrow is None:
+                return
+            key = getattr(lbrow, "_bravos_key", None)
+            if key:
+                stack.set_visible_child_name(key)
+        lst.connect("row-selected", on_row_selected)
+
+        win.show_all()
+        self.win = win
+
+        # build page contents (after widgets realized)
+        for key, page in pages.items():
+            BUILDERS[key](win, page)
+        pages["about"].show_all()
+        lst.select_row(lst.get_row_at_index(0))
+        self._pages = pages
+        self._lst = lst
+        self._stack = stack
+
+
+def main():
+    selftest = "--selftest" in sys.argv
+    app = SettingsApp()
+
+    if selftest:
+        # Build every page against the real display; report pass/fail.
+        outcomes = []
+
+        def after(*a):
+            try:
+                for key, page in app._pages.items():
+                    try:
+                        BUILDERS[key](app.win, page)
+                        print("SELTEST-PASS %s" % key)
+                        outcomes.append(True)
+                    except Exception as e:
+                        print("SELTEST-FAIL %s: %s" % (key, e))
+                        outcomes.append(False)
+                print("SELTEST-DONE ok=%s" % all(outcomes))
+            finally:
+                app.quit()
+        app.connect("activate", lambda a: GLib.idle_add(after))
+        app.run([])
+        sys.exit(0 if outcomes and all(outcomes) else 1)
+    else:
+        app.run([])
+
+
+if __name__ == "__main__":
+    main()
