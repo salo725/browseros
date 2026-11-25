@@ -99,6 +99,9 @@ EOF
 
 run_in_rootfs() { chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive "$@"; }
 
+# wipe any partial indexes debootstrap may have left, force a full update
+rm -rf "$ROOTFS/var/lib/apt/lists/"*
+
 log "apt update"
 run_in_rootfs apt-get update
 

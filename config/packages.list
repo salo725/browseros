@@ -49,9 +49,9 @@ pcmanfm
 xterm
 
 # --- network ---
-networkmanager
+network-manager
 network-manager-gnome
-wpa_supplicant
+wpasupplicant
 
 # --- audio ---
 pulseaudio
