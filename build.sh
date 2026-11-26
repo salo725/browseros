@@ -308,13 +308,23 @@ chroot "$ROOTFS" update-initramfs -u -t
 log "cleaning rootfs"
 run_in_rootfs apt-get clean
 run_in_rootfs rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
-  /var/cache/fontconfig /var/log/* /var/tmp/*
+  /var/log/* /var/tmp/*
 chroot "$ROOTFS" rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* \
   /usr/share/gnome/help 2>/dev/null || true
 # strip non-en locales, keep C/C.UTF-8/en*
 find "$ROOTFS/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
   ! -name 'C*' ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true
 rm -f "$ROOTFS/usr/sbin/policy-rc.d" "$ROOTFS/etc/resolv.conf"
+
+# Pre-generate fontconfig caches AFTER cleanup: on a live boot, a missing
+# cache makes fontconfig rebuild it into the tmpfs overlay (~200MB for
+# Noto-CJK), which counted against the idle-RAM budget. Generated here, the
+# caches live in the read-only squashfs (page cache only, reclaimable).
+log "pre-generating fontconfig caches"
+run_in_rootfs sh -c 'fc-cache -f >/dev/null 2>&1 || true'
+[ -d "$ROOTFS/var/cache/fontconfig" ] && \
+  log "fontconfig cache: $(du -sh "$ROOTFS/var/cache/fontconfig" | cut -f1)" || \
+  log "WARNING: no fontconfig cache generated"
 
 # -----------------------------------------------------------------------------
 # 8. Squashfs

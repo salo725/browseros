@@ -4,3 +4,8 @@ output/
 __pycache__/
 *.pyc
 rust/target/
+
+# dev junk
+**/__pycache__/
+core
+*.pyc

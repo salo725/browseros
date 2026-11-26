@@ -15,13 +15,13 @@ the way.
 |---|---|---|
 | Base | Debian 12 (bookworm) `minbase` debootstrap — no distro layer | — |
 | Kernel | Linux 6.1 LTS (Debian build, full driver suite) | — |
-| Session | Xorg + Openbox + picom compositor + tint2 panel | ~90–130 MB |
+| Session | Xorg + **bwm** (our Rust WM) + **bshell** (dock/panel) + bwall | ~90–130 MB |
 | Browser | Brave (official release repo) | on demand |
 | Files | PCManFM (also draws the desktop/wallpaper) | on demand |
-| Settings | **custom GTK app** (`bravos-settings`, ~600 lines) | on demand |
+| Settings | **bsettings** — our own Rust settings app | on demand |
 | Installer | **custom GTK wizard** (`bravos-installer`) | on demand |
 | Sound | PulseAudio + ALSA | ~12 MB |
-| Network | NetworkManager + nm-applet + wpa_supplicant | ~15 MB |
+| Network | NetworkManager + wpa_supplicant | ~15 MB |
 
 The full boot-to-login idle footprint (kernel + session, no apps open) is
 measured in CI on every build — see the `idle-ram` line in the smoke-test log
@@ -42,19 +42,28 @@ and the `ram-report.txt` artifact.
   dongles via `firmware-realtek`/`firmware-misc-nonfree`.
 - Audio: HDA Intel/Realtek/AMD, SOF (2018+).
 
-## Custom UI
+## Custom UI (v2.0 — full Rust shell, BraveOS v2 design)
 
-- Dark "Brave" GTK theme with brand-orange (#f04e23) accents, custom Openbox
-  window theme, custom wallpapers/GRUB background and icon set (all generated
-  by `scripts/gen_assets.py` — sources in `assets/icons/*.svg`).
-- Compositing: shadows + **fluid fade animations** (picom), smooth desktop/
-  workspace transitions.
-- **Custom Settings app** with sidebar navigation: About, Display, Network,
-  Sound, Brave, Memory & Storage, Power & Tuning, Live Session.
-- **Custom start page** (`/usr/share/bravos/start/start.html`) with clock,
-  search and quick tiles.
-- Top panel with Brave/Files/Settings/Installer launchers, taskbar, systray
-  and clock.
+The whole desktop shell is ours, in pure Rust on Xlib (no Openbox, no tint2,
+no GTK for the shell):
+
+- **bwm** — our window manager (Rust): custom rounded decorations, workspaces,
+  Alt+Tab switcher, edge snapping, EWMH compliance, ~20 global shortcuts,
+  all wired to the dock/panel design.
+- **bshell** — the shell: glassy **top status bar** (BraveOS brand, workspace
+  pager, live task pills, clock) and the signature **radial arc dock** — a
+  bottom-center glassmorphic dome with an orange/magenta rim, hero Brave
+  button, Files/Settings/Terminal/App-Grid on the inner ring and
+  Moon/Wi-Fi/Power/Lock on the outer ring, all hit-tested and click-tested.
+- **bsettings** — our own Rust settings app (display, network, sound, Brave
+  flags, keyboard, appearance, power).
+- **bwall** — wallpaper setter for the generated starry-sunset lion wallpaper.
+- **bshot** — screenshot tool.
+- **32-language i18n** (`rust/i18n/*.json`, auto-detected, English fallback)
+  with a pure-Rust text stack (fontdue + rustybuzz): proper shaping for
+  Arabic/Devanagari/CJK in shell and settings.
+- Hybrid ISO: boots as CD/DVD, and as USB in **both Rufus modes** —
+  "ISO Image" and "DD Image" (CI boot-tests all three paths).
 
 ## Resource efficiency
 
@@ -103,7 +112,8 @@ sudo bash build.sh
 - Secure Boot machines need it disabled in firmware setup (unsigned GRUB).
 - Rootfs squashfs ≈ 0.8–1 GB ISO — firmware blobs for 14 years of hardware
   are the bulk of it.
-- English UI only; no CJK fonts preinstalled (add via Brave or APT post-install).
+- Shell translations cover 32 languages (English fallback); Brave itself
+  covers 80+.
 - GUI button *clicks* are not machine-verified in CI; the smoke test does
   verify boot, login, session processes, idle RAM, self-tests of both custom
   apps and screenshots of the real display.
@@ -112,10 +122,13 @@ sudo bash build.sh
 
 ```
 build.sh               ISO build orchestrator (runs as root, on CI or locally)
+rust/                  the Rust desktop (bwm, bshell, bsettings, bwall, bshot, bui)
+rust/i18n/             32-language translations
 config/packages.list   exact package set
-config/initial_preferences  Brave start page + sane defaults
 grub/grub.cfg          live boot menu
 scripts/gen_assets.py  wallpapers, GRUB bg, icon rasterizer
+scripts/dev_session.sh local Xvfb test session for the Rust shell
+scripts/ui_test.sh     guest-side button-level UI test (runs in CI)
 scripts/smoke_test.py  QEMU boot test + screenshots + RAM report
-rootfs/                everything overlaid into the image (apps, themes, configs)
+rootfs/                everything overlaid into the image (apps, configs)
 ```

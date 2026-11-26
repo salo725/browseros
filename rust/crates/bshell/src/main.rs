@@ -816,13 +816,27 @@ impl Handler for PowerH {
         let idx = ((y - 12) / 54).max(0) as usize;
         let id = self.0.borrow().power;
         app.set_geom(id, -POWER_W * 2, -POWER_H * 2, POWER_W, POWER_H);
-        match idx {
-            0 => spawn(&["xtrlock"]),
-            1 => spawn(&["sh", "-c", "systemctl suspend -i || xset dpms force suspend"]),
-            2 => spawn(&["sh", "-c", "systemctl reboot -i"]),
-            3 => spawn(&["sh", "-c", "systemctl poweroff -i"]),
-            _ => {}
+        // rows are 46px tall with 8px gaps: only trigger inside a row, so
+        // margin/gap clicks just close the menu (never an accidental reboot)
+        let in_row = (y - 12 - idx as i32 * 54) <= 46;
+        if in_row {
+            match idx {
+                0 => spawn(&["xtrlock"]),
+                1 => spawn(&["sh", "-c", "systemctl suspend -i || xset dpms force suspend"]),
+                2 => spawn(&["sh", "-c", "systemctl reboot -i"]),
+                3 => spawn(&["sh", "-c", "systemctl poweroff -i"]),
+                _ => {}
+            }
         }
+    }
+    fn key(&mut self, app: &mut App, ks: u32, _state: u16) -> bool {
+        if ks == 0xff1b {
+            // Escape closes the power menu without triggering anything
+            let id = self.0.borrow().power;
+            app.set_geom(id, -POWER_W * 2, -POWER_H * 2, POWER_W, POWER_H);
+            return true;
+        }
+        false
     }
 }
 
