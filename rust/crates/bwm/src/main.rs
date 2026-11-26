@@ -1208,6 +1208,9 @@ fn main() {
 
     // event loop
     loop {
+        // poll_for_event does NOT flush pending writes: flush once per
+        // iteration so forwarded ConfigureRequests etc. are actually sent
+        wm.conn.flush().ok();
         let Some(ev) = wm.conn.poll_for_event().ok().flatten() else {
             std::thread::sleep(std::time::Duration::from_millis(30));
             continue;
@@ -1249,6 +1252,7 @@ fn main() {
                         .height(e.height as u32)
                         .stack_mode(e.stack_mode);
                     wm.conn.configure_window(e.window, &aux).ok();
+                    wm.conn.flush().ok();
                 }
             }
             Event::Expose(e) => {
