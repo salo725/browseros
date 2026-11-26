@@ -94,7 +94,20 @@ grid_on_screen() {
 if [ -n "${GRID:-}" ] && grid_on_screen "$GRID"; then
   ok "dock app-grid opens on screen"
 else
-  bad "dock app-grid" "grid window not visible"
+  echo "UITEST-DIAG grid-geom-1: $(xdotool getwindowgeometry "$GRID" 2>&1 | tr '\n' ' ')"
+  # second click (state could have been left open by a stray earlier press)
+  diag grid $(( SW / 2 + 105 )) $(( SH - 66 )); sleep 1.5
+  if ! grid_on_screen "$GRID"; then
+    echo "UITEST-DIAG grid-geom-2: $(xdotool getwindowgeometry "$GRID" 2>&1 | tr '\n' ' ')"
+    # probe the move path directly: if this works the click never fired,
+    # if not the ConfigureRequest forwarding path is broken
+    xdotool windowmove "$GRID" $(( (SW - 620) / 2 )) $(( (SH - 430) / 2 - 40 )) 2>&1 | sed 's/^/UITEST-DIAG windowmove: /'
+    sleep 0.8
+    echo "UITEST-DIAG grid-geom-3: $(xdotool getwindowgeometry "$GRID" 2>&1 | tr '\n' ' ')"
+    bad "dock app-grid" "grid window not visible"
+  else
+    ok "dock app-grid opens on screen (second click)"
+  fi
 fi
 shot grid
 xdotool key --clearmodifiers Escape; sleep 0.5
@@ -172,8 +185,20 @@ shot lang-de
 printf '{"language":"auto"}' > ~/.config/bravos/config.json
 touch /tmp/.bravos-config-stamp
 
-# 17) RAM bookkeeping
+# 17) RAM bookkeeping + idle-RAM breakdown
 free -b | awk 'NR==2{printf "MEMB %s %s", $2, $7}'
+echo "UITEST-MEM free-m:"
+free -m | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM meminfo:"
+grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapCached|Shmem|Slab|SReclaimable|SUnreclaim|KernelStack|PageTables|AnonPages|Mapped|SwapTotal|SwapFree)' /proc/meminfo | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM swap:"
+swapon --show 2>/dev/null | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM zram0 mm_stat:"
+cat /sys/block/zram0/mm_stat 2>/dev/null | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM tmpfs/overlay:"
+df -h -t tmpfs -t overlay 2>/dev/null | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM overlay dirs:"
+du -sh /run/live/overlay* /overlayfs /var/cache/fontconfig 2>/dev/null | sed 's/^/UITEST-MEM /'
 
 for sh in grid moon power lock; do
   if [ -f "/tmp/uitest-$sh.png" ]; then

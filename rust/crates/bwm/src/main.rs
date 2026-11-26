@@ -68,6 +68,8 @@ struct Wm {
     gc: Gcontext,
     border_glow: bool,
     switcher_state: Option<(usize, Vec<Window>)>,
+    // pass-through windows (panels/docks), with a desktop flag
+    shell_wins: Vec<(Window, bool)>,
     top_strut: i32,
     bottom_strut: i32,
     utf8_atom: u32,
@@ -286,6 +288,7 @@ impl Wm {
             gc,
             border_glow: true,
             switcher_state: None,
+            shell_wins: Vec::new(),
             top_strut: 0,
             bottom_strut: 0,
             argb_visual,
@@ -318,6 +321,18 @@ impl Wm {
         self.conn
             .change_property32(PropMode::REPLACE, win, self.atom(prop), 33u32 /* XA_WINDOW */, data)
             .ok();
+    }
+
+    /// Keep panels/docks on top of every client frame. Called after any
+    /// frame is mapped or raised, so app windows can never bury the shell.
+    fn raise_shell(&self) {
+        for &(w, is_desktop) in &self.shell_wins {
+            let mode = if is_desktop { StackMode::BELOW } else { StackMode::ABOVE };
+            self.conn
+                .configure_window(w, &ConfigureWindowAux::new().stack_mode(mode))
+                .ok();
+        }
+        self.conn.flush().ok();
     }
 
     fn update_client_list(&self) {
@@ -368,6 +383,18 @@ impl Wm {
         let w = ww * 7 / 10;
         let h = wh * 7 / 10;
         (wx + (ww - w) / 2, wy + (wh - h) / 2, w, h)
+    }
+
+    /// Position for a new client with a known size: center it on the ACTUAL
+    /// size (not the default) and clamp inside the workarea so windows never
+    /// hang off the screen or cover the panel/dock bands.
+    fn place_for_size(&self, w: i32, h: i32) -> (i32, i32) {
+        let (wx, wy, ww, wh) = self.workarea;
+        let w = w.min(ww).max(1);
+        let h = h.min(wh).max(1);
+        let x = (wx + (ww - w) / 2).max(wx);
+        let y = (wy + (wh - h) / 2).max(wy);
+        (x, y)
     }
 
     fn window_type_skip(&self, win: Window) -> bool {
@@ -437,6 +464,7 @@ impl Wm {
             // its strut reservation if any
             self.absorb_strut(win);
             self.conn.map_window(win).ok();
+            self.shell_wins.push((win, false));
             // desktop-type windows live at the very bottom of the stack
             let ty = self.atom("_NET_WM_WINDOW_TYPE");
             let is_desktop = self
@@ -447,6 +475,9 @@ impl Wm {
                 .and_then(|r| r.value32().map(|it| it.collect::<Vec<u32>>()))
                 .map(|v| v.contains(&self.atom("_NET_WM_WINDOW_TYPE_DESKTOP")))
                 .unwrap_or(false);
+            if let Some(last) = self.shell_wins.last_mut() {
+                last.1 = is_desktop;
+            }
             if is_desktop {
                 self.conn
                     .configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))
@@ -459,13 +490,16 @@ impl Wm {
             }
             return;
         }
-        let (mut x, mut y, mut w, mut h) = self.geom_for_new();
+        let (_dx, _dy, mut w, mut h) = self.geom_for_new();
         // honor the app's requested size if sane
         let Some(geo) = self.conn.get_geometry(win).ok().and_then(|c| c.reply().ok()) else { return };
         if geo.width > 50 && geo.height > 50 {
             w = geo.width as i32;
             h = geo.height as i32;
         }
+        // center on the real size, clamped to the workarea (panel + dock
+        // reserve their bands; big windows stay inside)
+        let (x, y) = self.place_for_size(w, h);
         // position hints from ConfigureWindow by the app are lost pre-manage;
         // keep geometry default.
 
@@ -525,9 +559,11 @@ impl Wm {
         self.update_desktop_props();
         self.redraw_frame(frame);
         self.focus_client(win);
+        self.raise_shell();
     }
 
     fn unmanage(&mut self, win: Window) {
+        self.shell_wins.retain(|&(w, _)| w != win);
         if let Some(i) = self.clients.iter().position(|c| c.win == win) {
             let c = self.clients.remove(i);
             println!("bwm: unmanage win {}", win);
@@ -816,6 +852,7 @@ impl Wm {
             let frame = self.clients[i].frame;
             self.conn.configure_window(frame, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE)).ok();
         }
+        self.raise_shell();
     }
 
     // ------------------------------------------------------------ spawning
@@ -1242,6 +1279,8 @@ fn main() {
                         wm.conn
                             .configure_window(frame, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
                             .ok();
+                        // panels and docks stay above app windows, always
+                        wm.raise_shell();
                     }
                 } else if e.event == wm.root && e.detail == 1 {
                     wm.focused = None;
@@ -1269,6 +1308,7 @@ fn main() {
                         wm.conn
                             .configure_window(frame, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
                             .ok();
+                        wm.raise_shell();
                     }
                 } else if e.type_ == wm.atom("_NET_CURRENT_DESKTOP") {
                     wm.set_desktop(data[0]);
