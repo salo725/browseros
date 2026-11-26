@@ -55,6 +55,11 @@ xdotool key --clearmodifiers Escape; sleep 0.5
 #    terminal sits +55px right of center, 92px above the bottom edge)
 xdotool mousemove $(( SW / 2 + 55 )) $(( SH - 92 )) click 1; sleep 2.5
 XT=$(pgrep -c -x xterm)
+if [ "$XT" -lt 1 ]; then
+  echo "UITEST-INFO retry: xterm=$(ls -la /usr/bin/xterm 2>&1) actwin=$(xdotool getactivewindow getwindowname 2>&1)"
+  xdotool mousemove $(( SW / 2 + 55 )) $(( SH - 92 )) click 1; sleep 3
+  XT=$(pgrep -c -x xterm)
+fi
 [ "$XT" -ge 1 ] && ok "dock terminal launches xterm" || bad "dock terminal" "no xterm"
 
 # 8) taskbar dynamics: task pill appears for the xterm window
