@@ -316,7 +316,7 @@ impl Wm {
 
     fn set_window_prop(&self, win: Window, prop: &str, data: &[u32]) {
         self.conn
-            .change_property32(PropMode::REPLACE, win, self.atom(prop), 33 /* XA_WINDOW */, data)
+            .change_property32(PropMode::REPLACE, win, self.atom(prop), 33u32 /* XA_WINDOW */, data)
             .ok();
     }
 
