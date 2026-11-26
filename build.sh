@@ -35,12 +35,29 @@ for t in debootstrap mksquashfs grub-mkrescue rsvg-convert curl python3; do
   command -v "$t" >/dev/null 2>&1 || fail "missing host tool: $t"
 done
 
+# Rust toolchain (CI installs it, but be self-sufficient otherwise)
+if ! command -v cargo >/dev/null 2>&1; then
+  if [ -x "$HOME/.cargo/bin/cargo" ]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+  elif [ -x /root/.cargo/bin/cargo ]; then
+    export PATH="/root/.cargo/bin:$PATH"
+  else
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable >/dev/null 2>&1 \
+      || fail "no Rust toolchain and rustup install failed"
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+fi
+
 # -----------------------------------------------------------------------------
 # 1. Host-side asset generation (wallpapers, icons, grub background)
 # -----------------------------------------------------------------------------
 log "generating assets"
-python3 "$REPO_DIR/scripts/gen_assets.py" "$BUILD_DIR/assets"
+BRAVOS_DESIGN_PNG="${BRAVOS_DESIGN_PNG:-/home/z/my-project/upload/BraveOS.png}" \
+  python3 "$REPO_DIR/scripts/gen_assets.py" "$BUILD_DIR/assets"
 ASSETS="$BUILD_DIR/assets"
+# canonical wallpaper name used by the shell/wallpaper tool
+cp -f "$ASSETS/wallpaper-dark.png" "$ASSETS/braveos.png"
 
 # -----------------------------------------------------------------------------
 # 2. debootstrap - clean base
@@ -127,6 +144,19 @@ run_in_rootfs apt-get -f install -y
 log "copying overlay files"
 cp -a "$OVERLAY/." "$ROOTFS/"
 
+# --- Rust UI stack (bwm, bshell, bsettings, bwall, bshot) ---
+log "building Rust UI stack"
+( cd "$REPO_DIR/rust" && cargo build --release --offline 2>/dev/null ) \
+  || ( cd "$REPO_DIR/rust" && cargo build --release ) \
+  || fail "cargo build failed"
+for bin in bwm bshell bsettings bwall bshot; do
+  cp "$REPO_DIR/rust/target/release/$bin" "$ROOTFS/usr/local/bin/$bin"
+  chmod 755 "$ROOTFS/usr/local/bin/$bin"
+done
+mkdir -p "$ROOTFS/usr/share/bravos/i18n"
+cp "$REPO_DIR"/rust/i18n/*.json "$ROOTFS/usr/share/bravos/i18n/"
+log "rust stack installed ($(ls "$ROOTFS/usr/local/bin" | grep -c '^b' ) binaries)"
+
 # Generated assets into rootfs
 mkdir -p "$ROOTFS/usr/share/bravos/wallpapers" \
          "$ROOTFS/usr/share/bravos/icons" \
@@ -135,8 +165,9 @@ mkdir -p "$ROOTFS/usr/share/bravos/wallpapers" \
          "$ROOTFS/usr/share/backgrounds"
 echo "$VERSION" > "$ROOTFS/usr/share/bravos/VERSION"
 cp "$ASSETS/wallpaper-dark.png" "$ASSETS/wallpaper-light.png" \
-   "$ROOTFS/usr/share/bravos/wallpapers/" 2>/dev/null || true
-cp "$ASSETS/wallpaper-dark.png" "$ROOTFS/usr/share/backgrounds/bravos-dark.png"
+   "$ASSETS/wallpaper-aurora.png" "$ROOTFS/usr/share/bravos/wallpapers/" 2>/dev/null || true
+cp -f "$ASSETS/braveos.png" "$ROOTFS/usr/share/bravos/wallpapers/braveos.png" 2>/dev/null || true
+cp -f "$ASSETS/wallpaper-dark.png" "$ROOTFS/usr/share/backgrounds/bravos-dark.png"
 cp "$ASSETS"/icon-*.png "$ROOTFS/usr/share/bravos/icons/" 2>/dev/null || true
 cp "$ASSETS"/icon-*.png "$ROOTFS/usr/share/icons/hicolor/48x48/apps/" 2>/dev/null || true
 cp "$ASSETS"/icon-*.png "$ROOTFS/usr/local/share/icons/hicolor/48x48/apps/" 2>/dev/null || \
@@ -321,6 +352,48 @@ grub-mkfont -s 16 -o "$ISO_TREE/boot/grub/fonts/dejavu16.pf2" \
 # /.disk/info on the booted medium.
 mkdir -p "$ISO_TREE/.disk"
 echo "BraveOS $VERSION (amd64)" > "$ISO_TREE/.disk/info"
+
+# isolinux entries so Rufus "ISO Image" mode (BIOS) can boot the extracted
+# FAT volume exactly like our GRUB path does.
+ISOLINUX_BIN=""
+for p in /usr/lib/ISOLINUX/isolinux.bin /usr/lib/syslinux/modules/bios/isolinux.bin; do
+  [ -f "$p" ] && ISOLINUX_BIN="$p" && break
+done
+if [ -n "$ISOLINUX_BIN" ]; then
+  mkdir -p "$ISO_TREE/isolinux"
+  cp "$ISOLINUX_BIN" "$ISO_TREE/isolinux/isolinux.bin"
+  LDLINUX=""
+  for p in /usr/lib/ISOLINUX/ldlinux.c32 /usr/lib/syslinux/modules/bios/ldlinux.c32; do
+    [ -f "$p" ] && LDLINUX="$p" && break
+  done
+  [ -n "$LDLINUX" ] && cp "$LDLINUX" "$ISO_TREE/isolinux/ldlinux.c32"
+  cat > "$ISO_TREE/isolinux/isolinux.cfg" <<'EOF'
+SERIAL 0 115200
+UI menu.c32
+TIMEOUT 60
+PROMPT 0
+
+DEFAULT live
+
+LABEL live
+  KERNEL /live/vmlinuz
+  INITRD /live/initrd.img
+  APPEND boot=live console=tty1 console=ttyS0,115200
+
+LABEL safe
+  KERNEL /live/vmlinuz
+  INITRD /live/initrd.img
+  APPEND boot=live nomodeset console=tty1 console=ttyS0,115200
+
+LABEL toram
+  KERNEL /live/vmlinuz
+  INITRD /live/initrd.img
+  APPEND boot=live toram console=tty1 console=ttyS0,115200
+EOF
+  log "isolinux tree added for Rufus ISO-mode"
+else
+  log "isolinux.bin not found - Rufus ISO-mode (BIOS) files skipped"
+fi
 
 log "grub-mkrescue -> hybrid ISO"
 grub-mkrescue -o "$OUT/braveos-$VERSION-amd64.iso" "$ISO_TREE" \

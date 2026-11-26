@@ -1,0 +1,8 @@
+[package]
+name = "bwm"
+version = "2.0.0"
+edition = "2021"
+
+[dependencies]
+bui = { path = "../bui" }
+x11rb = { workspace = true }

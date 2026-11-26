@@ -39,9 +39,7 @@ xserver-xorg-video-intel
 xserver-xorg-video-fbdev
 
 # --- session stack (lightweight, no DE) ---
-openbox
 picom
-tint2
 
 # --- applications: browser, file manager, debug terminal ---
 brave-browser
@@ -61,10 +59,19 @@ alsa-utils
 python3-gi
 gir1.2-gtk-3.0
 
-# --- fonts ---
+# --- fonts (all-language coverage) ---
 fonts-dejavu-core
 fonts-liberation
 fonts-noto-core
+fonts-noto-cjk
+fonts-noto-color-emoji
+libfontconfig1
+libfreetype6
+
+# --- shell/runtime extras (lock screen, UI test tooling, X info) ---
+xtrlock
+xdotool
+x11-utils
 
 # --- live system ---
 live-boot

@@ -1,7 +1,7 @@
 #!/bin/bash
 # BraveOS user-side session (runs as 'brave', started by bravos-session).
-# openbox-session triggers /etc/xdg/openbox/autostart, which brings up
-# picom, tint2, nm-applet, pcmanfm --desktop and the welcome/installer app.
+# Brings up the v2 stack: picom + bwall + bshell, then execs bwm (the WM
+# keeps the session alive). Replaces the old openbox-session.
 set -u
 
 export DISPLAY=:0
@@ -22,7 +22,41 @@ if command -v dbus-launch >/dev/null 2>&1; then
   export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
 fi
 
-echo "bravos-session-user: launching openbox at $(date)"
+echo "bravos-session-user: starting BraveOS v2 stack at $(date)"
 touch "$XDG_RUNTIME_DIR/session-ready"
 
-exec openbox-session
+# Allow root (pkexec-launched installer) to draw on the user's screen
+xhost +si:localuser:root >/dev/null 2>&1 || true
+
+# Compositor: shadows + translucency for the glass UI (xrender works on any GPU)
+if command -v picom >/dev/null 2>&1; then
+  picom --config /usr/share/bravos/picom/picom.conf -b >/dev/null 2>&1 &
+fi
+
+# Wallpaper desktop window
+bwall >/dev/null 2>&1 &
+
+# Panel + radial dock + app grid + power menu
+bshell >/dev/null 2>&1 &
+
+sleep 0.5
+
+MODE="run"
+grep -q 'bravos.installer=1' /proc/cmdline 2>/dev/null && MODE="installer"
+
+case "$MODE" in
+  installer)
+    echo "bravos-session-user: installer mode" >> "$LOG" 2>/dev/null
+    pkexec /usr/local/bin/bravos-installer >/dev/null 2>&1 &
+    ;;
+  *)
+    if [ -d /run/live ]; then
+      : # live session: user launches from the dock
+    else
+      brave --maximized --no-first-run >/dev/null 2>&1 &
+    fi
+    ;;
+esac
+
+# The WM is the session leader: if it dies the session ends and X restarts.
+exec bwm

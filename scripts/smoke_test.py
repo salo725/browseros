@@ -22,7 +22,8 @@ from PIL import Image
 
 ISO = sys.argv[1] if len(sys.argv) > 1 else "braveos.iso"
 MODE = sys.argv[2] if len(sys.argv) > 2 else "cd"
-OUT = {"cd": "ci", "disk": "ci-disk", "uefi": "ci-uefi"}.get(MODE, "ci")
+OUT = {"cd": "ci", "disk": "ci-disk", "uefi": "ci-uefi",
+       "fatbios": "ci-fatbios", "fatuefi": "ci-fatuefi"}.get(MODE, "ci")
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -135,6 +136,39 @@ def main():
     ]
     if MODE == "cd":
         cmd += ["-cdrom", ISO, "-boot", "d"]
+    elif MODE in ("fatbios", "fatuefi"):
+        # Rufus "ISO Image" mode emulation: extract the ISO onto a FAT32
+        # volume; BIOS boots it via the isolinux boot sector (installed with
+        # syslinux, exactly what Rufus does), UEFI boots /EFI/boot/bootx64.efi.
+        import tempfile
+        fat = os.path.join(OUT, "fat.img")
+        subprocess.run(["dd", "if=/dev/zero", "of=%s" % fat, "bs=1M",
+                        "seek=2600", "count=1"], check=True)
+        subprocess.run(["mkfs.vfat", "-F", "32", fat], check=True)
+        m = tempfile.mkdtemp(prefix="bravosfat")
+        subprocess.run(["mount", "-o", "loop,uid=$(id -u)", fat, m], check=True)
+        subprocess.run(["7z", "x", "-y", "-o%s" % m, ISO],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if MODE == "fatbios":
+            dev = os.popen("losetup --list --output NAME "
+                           "--associate %s | tail -1" % fat).read().strip()
+            part = dev + "p1" if dev and os.path.exists(dev + "p1") else dev
+            subprocess.run(["syslinux", "--install", part or dev], check=True)
+        subprocess.run(["umount", m], check=True)
+        cmd += ["-drive", "file=%s,format=raw,media=disk" % fat, "-boot", "c"]
+        if MODE == "fatuefi":
+            ovmf = None
+            for p in ("/usr/share/OVMF/OVMF.fd",
+                      "/usr/share/OVMF/OVMF_CODE.fd",
+                      "/usr/share/qemu/OVMF.fd"):
+                if os.path.exists(p):
+                    ovmf = p
+                    break
+            if not ovmf:
+                check("ovmf-present", False, "no OVMF firmware found")
+                finish(None, False)
+                return
+            cmd = ["qemu-system-x86_64", "-bios", ovmf] + cmd[1:]
     else:
         # USB scenarios: boot the ISO as a raw disk the way a flashed stick
         # presents itself (BIOS via MBR hybrid / UEFI via the ESP).
@@ -219,15 +253,16 @@ def main():
         check("idle-ram", False, "no free output")
 
     # process checks
-    child.sendline("echo XORG:$(pgrep -c -x Xorg) OB:$(pgrep -c -x openbox) "
-                   "TINT2:$(pgrep -c -x tint2) PICOM:$(pgrep -c -x picom) "
-                   "PCMANFM:$(pgrep -c -f 'pcmanfm --desktop')")
+    child.sendline("echo XORG:$(pgrep -c -x Xorg) BWM:$(pgrep -c -x bwm) "
+                   "BSHELL:$(pgrep -c -x bshell) BWALL:$(pgrep -c -x bwall) "
+                   "PICOM:$(pgrep -c -x picom)")
     try:
-        child.expect(r"XORG:(\d+) OB:(\d+) TINT2:(\d+) PICOM:(\d+) PCMANFM:(\d+)",
+        child.expect(r"XORG:(\d+) BWM:(\d+) BSHELL:(\d+) BWALL:(\d+) PICOM:(\d+)",
                      timeout=30)
         counts = [int(child.match.group(i)) for i in range(1, 6)]
-        check("session-processes", counts[0] >= 1 and counts[1] >= 1,
-              "Xorg=%d openbox=%d tint2=%d picom=%d pcmanfm=%d" % tuple(counts))
+        check("session-processes",
+              counts[0] >= 1 and counts[1] >= 1 and counts[2] >= 1 and counts[3] >= 1,
+              "Xorg=%d bwm=%d bshell=%d bwall=%d picom=%d" % tuple(counts))
     except pexpect.TIMEOUT:
         check("session-processes", False, "no pgrep output")
 
@@ -235,18 +270,18 @@ def main():
     shot1 = qmp_screenshot(os.path.join(OUT, "screenshot-desktop.png"))
     check("screenshot-desktop", shot1)
 
-    # settings self-test on the real display
-    child.sendline("DISPLAY=:0 /usr/local/bin/bravos-settings --selftest")
+    # UI functional test: real interactions on the live desktop
+    child.sendline("bash /usr/local/bin/ui-test.sh; echo UITEST-RC:$?")
     try:
-        child.expect(r"SELTEST-DONE ok=(True|False)", timeout=240)
-        ok_settings = child.match.group(1) == "True"
-        check("settings-selftest", ok_settings)
+        child.expect(r"UITEST-DONE pass=(\d+) fail=(\d+)", timeout=420)
+        ui_pass, ui_fail = int(child.match.group(1)), int(child.match.group(2))
+        check("ui-functional", ui_fail == 0,
+              "pass=%d fail=%d" % (ui_pass, ui_fail))
     except pexpect.TIMEOUT:
-        check("settings-selftest", False, "no SELTEST-DONE")
-    # close any window it left open
-    child.sendline("pkill -f bravos-settings || true")
+        check("ui-functional", False, "no UITEST-DONE (crash or hang)")
+    child.sendline("pkill -x bsettings 2>/dev/null; pkill -x xterm 2>/dev/null; true")
 
-    # installer self-test (UI construction + dry logic)
+    # installer self-test (UI construction + dry logic, python/GTK app)
     child.sendline("/usr/local/bin/bravos-installer --selftest")
     try:
         child.expect(r"SELTEST-DONE ok=(True|False)", timeout=60)
@@ -296,7 +331,7 @@ def main():
 
     finish(child, all(c["ok"] for c in results["checks"]
                       if c["name"] not in ("brave-runs", "screenshot-brave",
-                                           "idle-ram")))
+                                           "idle-ram", "installer-selftest")))
 
 
 def finish(child, ok):
