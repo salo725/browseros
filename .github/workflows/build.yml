@@ -87,7 +87,7 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 python3-pip
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf python3-pip
           pip3 install --quiet pexpect pillow
           # make KVM usable by the runner user (images often leave it root-only)
           sudo chmod 666 /dev/kvm || true
@@ -99,8 +99,14 @@ jobs:
           name: braveos-iso
           path: iso/
 
-      - name: Boot test in QEMU
-        run: python3 scripts/smoke_test.py iso/*.iso
+      - name: Boot test in QEMU (CD)
+        run: python3 scripts/smoke_test.py iso/*.iso cd
+
+      - name: Boot test in QEMU (USB disk, BIOS)
+        run: python3 scripts/smoke_test.py iso/*.iso disk
+
+      - name: Boot test in QEMU (USB disk, UEFI)
+        run: python3 scripts/smoke_test.py iso/*.iso uefi
 
       - name: Upload test evidence
         if: always()
@@ -108,8 +114,41 @@ jobs:
         with:
           name: braveos-test-evidence
           path: |
-            ci/serial-log.txt
-            ci/ram-report.txt
-            ci/screenshot-*.png
+            ci*/serial-log.txt
+            ci*/ram-report.txt
+            ci*/screenshot-*.png
           retention-days: 30
           if-no-files-found: warn
+
+  release:
+    name: Create GitHub release
+    needs: [build, smoke-test]
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release == true
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: braveos-iso
+          path: out/
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(cat VERSION)
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading assets."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "BraveOS ${VERSION}" \
+              --notes "Bootable ISO of BraveOS ${VERSION} (unofficial Brave-browser-centered Linux distribution). Boot via USB/DVD; UEFI machines must disable Secure Boot for v1. See README for details."
+          fi
+          gh release upload "$TAG" out/*.iso out/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber

@@ -10,6 +10,7 @@ ci/screenshot-*.png. Exit code 0 = core pass.
 import json
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -19,9 +20,10 @@ import time
 import pexpect
 from PIL import Image
 
-OUT = "ci"
-os.makedirs(OUT, exist_ok=True)
 ISO = sys.argv[1] if len(sys.argv) > 1 else "braveos.iso"
+MODE = sys.argv[2] if len(sys.argv) > 2 else "cd"
+OUT = {"cd": "ci", "disk": "ci-disk", "uefi": "ci-uefi"}.get(MODE, "ci")
+os.makedirs(OUT, exist_ok=True)
 
 
 def kvm_usable():
@@ -114,6 +116,7 @@ def mem_used_mb(child):
 
 def main():
     global LOG
+    os.makedirs(OUT, exist_ok=True)
     log = open(os.path.join(OUT, "serial-log.txt"), "w", buffering=1)
     LOG = log
 
@@ -127,11 +130,33 @@ def main():
         "-display", "none",
         "-serial", "stdio",
         "-qmp", "unix:/tmp/bravos-qmp.sock,server=on,wait=off",
-        "-cdrom", ISO,
-        "-boot", "d",
         "-no-reboot",
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
     ]
+    if MODE == "cd":
+        cmd += ["-cdrom", ISO, "-boot", "d"]
+    else:
+        # USB scenarios: boot the ISO as a raw disk the way a flashed stick
+        # presents itself (BIOS via MBR hybrid / UEFI via the ESP).
+        img = os.path.join(OUT, "usb.img")
+        print("[smoke] copying ISO to raw disk image %s" % img)
+        shutil.copyfile(ISO, img)
+        cmd += ["-drive", "file=%s,format=raw,if=ahci,media=disk" % img,
+                "-boot", "c"]
+        if MODE == "uefi":
+            ovmf = None
+            for p in ("/usr/share/OVMF/OVMF.fd",
+                      "/usr/share/OVMF/OVMF_CODE.fd",
+                      "/usr/share/qemu/OVMF.fd"):
+                if os.path.exists(p):
+                    ovmf = p
+                    break
+            if not ovmf:
+                check("ovmf-present", False, "no OVMF firmware found")
+                finish(None, False)
+                return
+            check("ovmf-present", True, ovmf)
+            cmd = ["qemu-system-x86_64", "-bios", ovmf] + cmd[1:]
     print("[smoke] launching qemu: %s" % " ".join(cmd))
     child = pexpect.spawn(cmd[0], cmd[1:], timeout=600, encoding="utf-8",
                           codec_errors="replace")

@@ -317,6 +317,11 @@ mkdir -p "$ISO_TREE/boot/grub/fonts"
 grub-mkfont -s 16 -o "$ISO_TREE/boot/grub/fonts/dejavu16.pf2" \
   /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf 2>/dev/null || true
 
+# Standard medium marker: the GRUB EFI stub and live-boot tooling search for
+# /.disk/info on the booted medium.
+mkdir -p "$ISO_TREE/.disk"
+echo "BraveOS $VERSION (amd64)" > "$ISO_TREE/.disk/info"
+
 log "grub-mkrescue -> hybrid ISO"
 grub-mkrescue -o "$OUT/braveos-$VERSION-amd64.iso" "$ISO_TREE" \
   -- -volid BRAVEOS$VERSION -application_id "BraveOS $VERSION Live" >/dev/null 2>&1 \
