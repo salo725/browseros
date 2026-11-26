@@ -517,7 +517,16 @@ impl Wm {
                 WindowClass::INPUT_OUTPUT,
                 self.conn.setup().roots[0].root_visual,
                 &CreateWindowAux::new()
-                    .event_mask(EventMask::EXPOSURE | EventMask::BUTTON_PRESS | EventMask::STRUCTURE_NOTIFY),
+                    .event_mask(
+                        EventMask::EXPOSURE
+                            | EventMask::BUTTON_PRESS
+                            | EventMask::STRUCTURE_NOTIFY
+                            // children of the frame (the reparented client):
+                            // without this we never learn that a client window was
+                            // destroyed, and its empty frame would stay mapped on
+                            // screen forever (blocking the dock underneath)
+                            | EventMask::SUBSTRUCTURE_NOTIFY,
+                    ),
             )
             .unwrap();
         let _ = self.conn.change_window_attributes(win, &ChangeWindowAttributesAux::new().event_mask(
@@ -566,10 +575,17 @@ impl Wm {
         self.shell_wins.retain(|&(w, _)| w != win);
         if let Some(i) = self.clients.iter().position(|c| c.win == win) {
             let c = self.clients.remove(i);
-            println!("bwm: unmanage win {}", win);
+            println!("bwm: unmanage win {} (frame {})", win, c.frame);
             let _ = self.conn.destroy_window(c.frame);
             if self.focused == Some(win) {
-                self.focused = None;
+                // focus the next stacked client, or clear focus safely (never
+                // leave the focus dangling on a dead window: the server
+                // would then discard every keyboard event)
+                if let Some(next) = self.clients.last().map(|c| c.win) {
+                    self.focus_client(next);
+                } else {
+                    self.focus_none();
+                }
             }
             self.update_client_list();
         }
@@ -612,6 +628,19 @@ impl Wm {
         for f in frames {
             self.redraw_frame(f);
         }
+    }
+
+    /// Clear focus SAFELY: an X input focus of None (0) makes the server
+    /// discard ALL keyboard events - including GrabKey global shortcuts, so
+    /// after the last/focused window disappears the keyboard would silently
+    /// die. Focus the root instead (events no window selects, grabs live on).
+    fn focus_none(&mut self) {
+        self.focused = None;
+        self.set_u32_prop(self.root, "_NET_ACTIVE_WINDOW", &[0]);
+        self.conn
+            .set_input_focus(InputFocus::PARENT, self.root, 0u32)
+            .ok();
+        self.conn.flush().ok();
     }
 
     fn focus_client(&mut self, win: Window) {
@@ -685,8 +714,7 @@ impl Wm {
             self.conn.unmap_window(frame).ok();
             self.set_wm_state_atoms(i);
             if self.focused == Some(win) {
-                self.focused = None;
-                self.update_client_list();
+                self.focus_none();
             }
         }
     }
@@ -860,12 +888,24 @@ impl Wm {
     fn spawn(&self, argv: &[&str]) {
         let mut cmd = Command::new(argv[0]);
         cmd.args(&argv[1..]);
-        cmd.env("DISPLAY", ":0");
+        // inherit our DISPLAY (we are the session WM); only default when unset
+        if std::env::var("DISPLAY").is_err() {
+            cmd.env("DISPLAY", ":0");
+        }
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        if cmd.spawn().is_ok() {
-            println!("bwm: spawned {:?}", argv);
-        } else {
-            eprintln!("bwm: failed to spawn {:?}", argv);
+        match cmd.spawn() {
+            Ok(mut child) => {
+                println!("bwm: spawned {:?} (pid {})", argv, child.id());
+                // reap on exit so killed children do not linger as zombies
+                // (a zombie's /proc entry persists and can keep single-instance
+                // locks of other BraveOS apps looking "alive")
+                let _ = std::thread::Builder::new()
+                    .name("bwm-reap".into())
+                    .spawn(move || {
+                        let _ = child.wait();
+                    });
+            }
+            Err(e) => eprintln!("bwm: failed to spawn {:?}: {}", argv, e),
         }
     }
 
@@ -1207,12 +1247,35 @@ fn main() {
     wm.conn.flush().ok();
 
     // event loop
+    let mut sweep: u32 = 0;
     loop {
         // poll_for_event does NOT flush pending writes: flush once per
         // iteration so forwarded ConfigureRequests etc. are actually sent
         wm.conn.flush().ok();
         let Some(ev) = wm.conn.poll_for_event().ok().flatten() else {
             std::thread::sleep(std::time::Duration::from_millis(30));
+            // periodic liveness sweep (~every second): if a client died in a
+            // way we missed (event race, XID reuse, ...), drop it now instead
+            // of leaking its empty frame over the screen
+            sweep = sweep.wrapping_add(1);
+            if sweep % 32 == 0 {
+                let dead: Vec<Window> = wm
+                    .clients
+                    .iter()
+                    .filter(|c| {
+                        wm.conn
+                            .get_window_attributes(c.win)
+                            .ok()
+                            .and_then(|r| r.reply().ok())
+                            .is_none()
+                    })
+                    .map(|c| c.win)
+                    .collect();
+                for win in dead {
+                    println!("bwm: sweep unmanage dead client {}", win);
+                    wm.unmanage(win);
+                }
+            }
             continue;
         };
         match ev {
@@ -1221,16 +1284,42 @@ fn main() {
                 wm.manage(e.window);
             }
             Event::UnmapNotify(e) => {
+                // e.event == frame: the reparented client withdrew itself
+                // (closed to tray / withdrawn state). Verify it is really
+                // unmapped right now - the transient unmap our own reparent
+                // generates is always followed by us mapping the client
+                // again, so by the time we process the event it is viewable.
                 if let Some(i) = wm.find(e.window) {
-                    let minimized = wm.clients[i].minimized;
                     let frame = wm.clients[i].frame;
-                    if !minimized && e.event == frame {
+                    let minimized = wm.clients[i].minimized;
+                    if e.event == frame && !minimized {
+                        let withdrawn = wm
+                            .conn
+                            .get_window_attributes(e.window)
+                            .ok()
+                            .and_then(|c| c.reply().ok())
+                            .map(|a| a.map_state == MapState::UNMAPPED)
+                            .unwrap_or(true);
+                        if withdrawn {
+                            wm.unmanage(e.window);
+                        }
+                    } else if e.event == wm.root && !minimized {
+                        // pre-reparent unmap: treat as withdraw
                         wm.unmanage(e.window);
                     }
                 }
             }
             Event::DestroyNotify(e) => {
-                wm.unmanage(e.window);
+                // frame destroyed -> unmanage its client;
+                // client destroyed (child of frame, e.event == frame) -> unmanage;
+                // plain root child destroyed (shell window) -> bookkeeping only
+                if let Some(i) = wm.clients.iter().position(|c| c.frame == e.window) {
+                    wm.unmanage(wm.clients[i].win);
+                } else if wm.find(e.window).is_some() {
+                    wm.unmanage(e.window);
+                } else {
+                    wm.shell_wins.retain(|&(w, _)| w != e.window);
+                }
             }
             Event::ConfigureRequest(e) => {
                 // honor app geometry requests for unmanaged windows; for
@@ -1287,8 +1376,7 @@ fn main() {
                         wm.raise_shell();
                     }
                 } else if e.event == wm.root && e.detail == 1 {
-                    wm.focused = None;
-                    wm.update_client_list();
+                    wm.focus_none();
                     wm.redraw_all_frames();
                 }
             }

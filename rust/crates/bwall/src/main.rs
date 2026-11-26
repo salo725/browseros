@@ -1,15 +1,20 @@
 //! bwall — BraveOS desktop wallpaper (fullscreen desktop window).
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use bui::canvas::Canvas;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use bui::pngutil::Image;
 use bui::xapp::{App, Handler, WinOpts};
 
+#[derive(Clone)]
 struct Wall {
     img: Option<Image>,
     stamp: u64,
     wp: String,
+    win: u32,
 }
 
 fn config_stamp() -> u64 {
@@ -21,10 +26,12 @@ fn config_stamp() -> u64 {
         .unwrap_or(0)
 }
 
-impl Handler for Wall {
-    fn draw(&mut self, app: &mut App, cv: &mut Canvas) {
+struct WallH(Rc<RefCell<Wall>>);
+impl Handler for WallH {
+    fn draw(&mut self, _app: &mut App, cv: &mut Canvas) {
+        let w = self.0.borrow();
         cv.fill([8, 8, 12, 255]);
-        if let Some(img) = &self.img {
+        if let Some(img) = &w.img {
             cv.image(img, 0, 0);
         } else {
             // fallback gradient
@@ -34,18 +41,21 @@ impl Handler for Wall {
                 cv.rect(0, y, cv.w, 1, [c[0], c[1], c[2], 255]);
             }
         }
-        let _ = app;
     }
 
     fn tick(&mut self, app: &mut App) {
         let s = config_stamp();
-        if s != self.stamp {
-            self.stamp = s;
+        let mut w = self.0.borrow_mut();
+        if s != w.stamp {
+            w.stamp = s;
             app.cfg = bui::config::Config::load();
-            if app.cfg.wallpaper != self.wp {
-                self.wp = app.cfg.wallpaper.clone();
-                self.img = load_wall(app, &self.wp);
-                let id = app.win_ids()[0];
+            if app.cfg.wallpaper != w.wp {
+                w.wp = app.cfg.wallpaper.clone();
+                w.img = load_wall(app, &w.wp);
+                // our own window is out of the map while our tick runs: this
+                // queues the redraw and the event loop flushes it right after
+                let id = w.win;
+                drop(w);
                 app.redraw(id);
             }
         }
@@ -64,8 +74,13 @@ fn main() {
     let mut app = App::connect().expect("X11 connect");
     let wp_name = app.cfg.wallpaper.clone();
     let img = load_wall(&app, &wp_name);
-    let wall = Wall { img, stamp: config_stamp(), wp: wp_name };
-    app.add_win(
+    let wall = Rc::new(RefCell::new(Wall {
+        img,
+        stamp: config_stamp(),
+        wp: wp_name,
+        win: 0,
+    }));
+    let win = app.add_win(
         WinOpts {
             x: 0,
             y: 0,
@@ -78,11 +93,12 @@ fn main() {
             title: "bravos-wall",
             event_mask: bui::xapp::EventMask::EXPOSURE,
         },
-        Box::new(wall),
+        Box::new(WallH(wall.clone())),
     );
+    wall.borrow_mut().win = win;
     // drop to the bottom of the root's sibling stack so the shell sits above
     app.conn
-        .configure_window(app.win_ids()[0],
+        .configure_window(win,
             &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))
         .ok();
     app.conn.flush().ok();

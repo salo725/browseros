@@ -109,6 +109,19 @@ pub struct App {
     wm_delete: u32,
     atom_wm_protocols: u32,
     tick_accum: u8,
+    /// when true the event loop stops once the last window was closed
+    /// (used by normal applications like bsettings; the shell keeps false)
+    pub exit_on_last_close: bool,
+    /// while handler ticks run, their windows are temporarily out of the map:
+    /// redraw requests made from inside a tick are queued and flushed after
+    /// the window is back, so ticks can safely redraw themselves
+    in_tick: bool,
+    tick_redraw_queue: Vec<Win>,
+    /// same protection for pointer/key/property handlers: the window is out
+    /// of the map while its handler runs, so handler-issued redraws (for any
+    /// window) are queued and flushed after the handler returns
+    in_handler: bool,
+    handler_redraw_queue: Vec<Win>,
 }
 
 impl App {
@@ -196,6 +209,11 @@ impl App {
             wm_delete: 0,
             atom_wm_protocols: 0,
             tick_accum: 0,
+            exit_on_last_close: false,
+            in_tick: false,
+            tick_redraw_queue: Vec::new(),
+            in_handler: false,
+            handler_redraw_queue: Vec::new(),
         })
     }
 
@@ -301,6 +319,21 @@ impl App {
     }
 
     pub fn redraw(&mut self, id: Win) {
+        if self.in_tick {
+            // the window is temporarily out of the map while its own tick is
+            // running: queue and flush after the tick pass re-inserts it
+            if !self.tick_redraw_queue.contains(&id) {
+                self.tick_redraw_queue.push(id);
+            }
+            return;
+        }
+        if self.in_handler {
+            // same during pointer/key/property handlers
+            if !self.handler_redraw_queue.contains(&id) {
+                self.handler_redraw_queue.push(id);
+            }
+            return;
+        }
         let Some(mut w) = self.wins.remove(&id) else { return };
         if w.canvas.w != w.w || w.canvas.h != w.h {
             w.canvas = Canvas::new(w.w, w.h);
@@ -341,6 +374,20 @@ impl App {
             win.h = h;
         }
         self.redraw(id);
+    }
+
+    /// Route ALL keyboard input to `id` while it is open (popup menus never
+    /// get focus, so their Escape/arrow handling would otherwise never run).
+    /// The grab dies with our connection, so it can never get stuck.
+    pub fn grab_keyboard(&mut self, id: Win) {
+        use x11rb::protocol::xproto::GrabMode;
+        let _ = self.conn.grab_keyboard(false, id, 0u32, GrabMode::ASYNC, GrabMode::ASYNC);
+        let _ = self.conn.flush();
+    }
+
+    pub fn ungrab_keyboard(&mut self) {
+        let _ = self.conn.ungrab_keyboard(0u32);
+        let _ = self.conn.flush();
     }
 
     /// True when the delete-window protocol wants the window closed.
@@ -389,6 +436,11 @@ impl App {
             if stop(self) {
                 return;
             }
+            // applications that want a normal lifecycle exit when their last
+            // window was closed (WM_DELETE) instead of lingering with no UI
+            if self.exit_on_last_close && self.wins.is_empty() {
+                return;
+            }
             // Dispatch all pending events, then tick
             let mut handled_any = false;
             while let Some(ev) = self
@@ -409,11 +461,17 @@ impl App {
                 self.tick_accum += 1;
                 if self.tick_accum >= 25 {
                     self.tick_accum = 0;
+                    self.in_tick = true;
                     let ids: Vec<Win> = self.wins.keys().copied().collect();
                     for id in ids {
                         let Some(mut w) = self.wins.remove(&id) else { continue };
                         w.handler.tick(self);
                         self.wins.insert(id, w);
+                    }
+                    self.in_tick = false;
+                    // flush redraws requested from inside ticks
+                    while let Some(id) = self.tick_redraw_queue.pop() {
+                        self.redraw(id);
                     }
                 }
             }
@@ -437,8 +495,11 @@ impl App {
                             w.h = nh;
                         }
                         let mut w = self.wins.remove(&id).unwrap();
+                        self.in_handler = true;
                         w.handler.resized(self, nw, nh);
+                        self.in_handler = false;
                         self.wins.insert(id, w);
+                        self.flush_handler_redraws();
                         self.redraw(id);
                     }
                 }
@@ -446,20 +507,29 @@ impl App {
             Event::ButtonPress(e) => {
                 let (id, x, y) = (e.event, e.event_x as i32, e.event_y as i32);
                 let mut w = match self.wins.remove(&id) { Some(w) => w, None => return };
+                self.in_handler = true;
                 w.handler.pointer(self, PtrKind::Down(e.detail), x, y);
+                self.in_handler = false;
                 self.wins.insert(id, w);
+                self.flush_handler_redraws();
             }
             Event::ButtonRelease(e) => {
                 let (id, x, y) = (e.event, e.event_x as i32, e.event_y as i32);
                 let mut w = match self.wins.remove(&id) { Some(w) => w, None => return };
+                self.in_handler = true;
                 w.handler.pointer(self, PtrKind::Up(e.detail), x, y);
+                self.in_handler = false;
                 self.wins.insert(id, w);
+                self.flush_handler_redraws();
             }
             Event::MotionNotify(e) => {
                 let (id, x, y) = (e.event, e.event_x as i32, e.event_y as i32);
                 let mut w = match self.wins.remove(&id) { Some(w) => w, None => return };
+                self.in_handler = true;
                 w.handler.pointer(self, PtrKind::Move, x, y);
+                self.in_handler = false;
                 self.wins.insert(id, w);
+                self.flush_handler_redraws();
             }
             Event::KeyPress(e) => {
                 let id = e.event;
@@ -467,8 +537,11 @@ impl App {
                 let state = e.state;
                 let ks = self.keysym_for(kc);
                 let mut w = match self.wins.remove(&id) { Some(w) => w, None => return };
+                self.in_handler = true;
                 w.handler.key(self, ks, state.bits() as u16);
+                self.in_handler = false;
                 self.wins.insert(id, w);
+                self.flush_handler_redraws();
             }
             Event::ClientMessage(e) => {
                 if self.is_wm_delete(&e) {
@@ -488,10 +561,21 @@ impl App {
             Event::PropertyNotify(e) => {
                 let id = e.window;
                 let mut w = match self.wins.remove(&id) { Some(w) => w, None => return };
+                self.in_handler = true;
                 w.handler.property(self, e.atom);
+                self.in_handler = false;
                 self.wins.insert(id, w);
+                self.flush_handler_redraws();
             }
             _ => {}
+        }
+    }
+
+    /// Redraws requested by handlers are flushed once the window is back in
+    /// the map (handlers run with their window temporarily removed).
+    fn flush_handler_redraws(&mut self) {
+        while let Some(id) = self.handler_redraw_queue.pop() {
+            self.redraw(id);
         }
     }
 

@@ -47,6 +47,7 @@ enum Ctl {
 }
 
 struct State {
+    win: u32, // our X window (set after add_win)
     section: usize,
     hits: Vec<(Rect, Ctl)>,
     drop_open: Option<&'static str>,
@@ -106,6 +107,7 @@ impl SettingsApp {
             ("screenshot", "sc_shot"), ("app_grid", "sc_grid"),
         ];
         let st = State {
+            win: 0,
             section: 0,
             hits: Vec::new(),
             drop_open: None,
@@ -943,7 +945,7 @@ impl SettingsApp {
                     "wallpaper" => {
                         app.cfg.wallpaper = match val.as_str() {
                             "BraveOS Light" => "braveos-light.png".to_string(),
-                            "Aurora" => "aurora.png".to_string(),
+                            "Aurora" => "braveos-aurora.png".to_string(),
                             _ => "braveos.png".to_string(),
                         };
                         app.cfg.save();
@@ -1060,27 +1062,108 @@ fn keysym_name(ks: u32) -> String {
 
 // ---------------------------------------------------------------- main
 
+/// When Settings is already running, locate its window and ask the WM to
+/// activate/raise it (EWMH _NET_ACTIVE_WINDOW client message on the root).
+fn focus_existing() -> Option<()> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ClientMessageEvent;
+    use x11rb::protocol::xproto::{ConnectionExt as XProtoExt, EventMask};
+    use x11rb::wrapper::ConnectionExt as WrapExt;
+    use x11rb::rust_connection::RustConnection;
+
+    let (conn, screen) = RustConnection::connect(None).ok()?;
+    let root = conn.setup().roots[screen].root;
+    let query = |name: &str| -> Option<u32> {
+        conn.intern_atom(false, name.as_bytes())
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.atom)
+    };
+    let active = query("_NET_ACTIVE_WINDOW")?;
+    let client_list = query("_NET_CLIENT_LIST")?;
+    let class = query("WM_CLASS")?;
+    let reply = conn
+        .get_property(false, root, client_list, 0u32, 0, 256)
+        .ok()?
+        .reply()
+        .ok()?;
+    let wins: Vec<u32> = reply.value32()?.collect();
+    for w in wins {
+        if let Ok(r) = conn.get_property(false, w, class, 0u32, 0, 256) {
+            if let Ok(rep) = r.reply() {
+                let s = String::from_utf8_lossy(&rep.value).to_string();
+                if s.contains("bsettings") {
+                    let ev = ClientMessageEvent::new(32, w, active, [1, 0, 0, 0, 0]);
+                    let _ = conn.send_event(
+                        false,
+                        root,
+                        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                        &ev,
+                    );
+                    let _ = conn.flush();
+                    return Some(());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn main() {
-    // single instance: clicking Settings twice must not stack windows
-    if std::fs::metadata("/tmp/.bravos-settings-running").is_ok() {
-        return;
+    // single instance: clicking Settings twice must not stack windows.
+    // The lock stores our PID; a stale lock (previous process was killed -
+    // SIGTERM runs no destructors) is taken over so Settings can always be
+    // reopened. Zombie / dead holders count as stale.
+    const LOCK: &str = "/tmp/.bravos-settings-running";
+    let pid = std::process::id();
+    let alive = |p: u32| -> bool {
+        if p == pid {
+            return true;
+        }
+        // state is the field after "(comm)" in /proc/<pid>/stat; Z (zombie)
+        // and X (dead) mean no live instance holds the lock
+        match std::fs::read_to_string(format!("/proc/{p}/stat")) {
+            Ok(stat) => match stat.rsplit(')').next() {
+                Some(rest) => matches!(
+                    rest.trim_start().chars().next(),
+                    Some('R') | Some('S') | Some('D') | Some('T') | Some('t')
+                ),
+                None => false,
+            },
+            Err(_) => false,
+        }
+    };
+    if let Ok(s) = std::fs::read_to_string(LOCK) {
+        match s.trim().parse::<u32>() {
+            Ok(p) if alive(p) => {
+                // already running: bring the existing window to the front
+                focus_existing();
+                return;
+            }
+            _ => {
+                let _ = std::fs::remove_file(LOCK); // stale: previous died
+            }
+        }
     }
     struct LockGuard;
     impl Drop for LockGuard {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file("/tmp/.bravos-settings-running");
+            let _ = std::fs::remove_file(LOCK);
         }
     }
     let _guard = LockGuard;
     if std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open("/tmp/.bravos-settings-running")
+        .open(LOCK)
         .is_err()
     {
-        return; // another instance is running
+        return; // another instance won the race
     }
+    let _ = std::fs::write(LOCK, pid.to_string());
     let mut app = App::connect().expect("bsettings: X11 connect");
+    // normal application lifecycle: exit cleanly when the window is closed
+    app.exit_on_last_close = true;
     let target = std::env::args().nth(1);
     let sa = SettingsApp::new(&app);
     if let Some(sec) = target {
@@ -1128,7 +1211,9 @@ fn main() {
         },
         Box::new(WrappedSettings(sa.clone())),
     );
-    let _ = w;
+    // remember our window id so handlers can redraw without indexing the
+    // (handler-scope-empty) window map
+    sa.st.borrow_mut().win = w;
 
     // The accent swatch click needs the click x-coordinate; intercept in a
     // custom wrapper is complex — patch: SwatchCtl handled via Ctl::Btn("accent")
@@ -1168,16 +1253,19 @@ impl Handler for WrappedSettings {
                 app.cfg.accent = hexes[col].to_string();
                 app.accent = Config::hex_rgb(&app.cfg.accent);
                 app.cfg.save();
-                app.redraw(app.win_ids()[0]);
+                let win = self.0.st.borrow().win;
+                app.redraw(win);
                 return;
             }
         }
         self.0.pointer(app, kind, x, y);
-        app.redraw(app.win_ids()[0]);
+        let win = self.0.st.borrow().win;
+        app.redraw(win);
     }
     fn key(&mut self, app: &mut App, ks: u32, state: u16) -> bool {
         self.0.key(app, ks, state);
-        app.redraw(app.win_ids()[0]);
+        let win = self.0.st.borrow().win;
+        app.redraw(win);
         true
     }
 }

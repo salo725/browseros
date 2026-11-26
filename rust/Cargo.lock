@@ -31,6 +31,7 @@ name = "bsettings"
 version = "2.0.0"
 dependencies = [
  "bui",
+ "x11rb",
 ]
 
 [[package]]

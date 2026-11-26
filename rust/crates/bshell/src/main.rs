@@ -36,14 +36,23 @@ fn sh(cmd: &str) -> String {
 }
 
 fn spawn(args: &[&str]) {
-    if let Err(e) = std::process::Command::new(args[0])
+    match std::process::Command::new(args[0])
         .args(&args[1..])
         .env("DISPLAY", std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        eprintln!("bshell: spawn {:?} failed: {}", args, e);
+        Ok(mut child) => {
+            // reap on exit so killed children (e.g. pkill'd Brave) do not
+            // linger as zombies holding /proc entries
+            let _ = std::thread::Builder::new()
+                .name("bshell-reap".into())
+                .spawn(move || {
+                    let _ = child.wait();
+                });
+        }
+        Err(e) => eprintln!("bshell: spawn {:?} failed: {}", args, e),
     }
 }
 
@@ -640,6 +649,7 @@ impl Handler for PanelH {
             match kind {
                 "power" => {
                     app.set_geom(power_win, app.screen_w - POWER_W - 20, app.screen_h - DOCK_H - 40 - POWER_H - 8, POWER_W, POWER_H);
+                    app.grab_keyboard(power_win);
                 }
                 "clock" => spawn(&["bsettings", "time"]),
                 "battery" => spawn(&["bsettings", "power"]),
@@ -709,8 +719,10 @@ impl Handler for DockH {
                         let id = self.0.borrow().grid;
                         if opening {
                             app.set_geom(id, (app.screen_w - GRID_W) / 2, (app.screen_h - GRID_H) / 2 - 40, GRID_W, GRID_H);
+                            app.grab_keyboard(id);
                         } else {
                             app.set_geom(id, -GRID_W * 2, (app.screen_h - GRID_H) / 2 - 40, GRID_W, GRID_H);
+                            app.ungrab_keyboard();
                         }
                     }
                     DockHit::Moon => {
@@ -723,6 +735,7 @@ impl Handler for DockH {
                     DockHit::PowerBtn => {
                         let id = self.0.borrow().power;
                         app.set_geom(id, app.screen_w - POWER_W - 20, app.screen_h - DOCK_H - 40 - POWER_H - 8, POWER_W, POWER_H);
+                        app.grab_keyboard(id);
                     }
                     DockHit::Lock => spawn(&["xtrlock"]),
                     DockHit::None => {}
@@ -738,7 +751,13 @@ impl Handler for DockH {
             app.cfg = Config::load();
             app.tr = bui::i18n::Tr::load(&app.cfg.language);
             app.accent = Config::hex_rgb(&app.cfg.accent);
-            for id in app.win_ids() {
+            // redraw ALL shell windows (ours included: it is out of the map
+            // during our own tick, so the redraw is queued and flushed after)
+            let ids = {
+                let s = self.0.borrow();
+                [s.panel, s.dock, s.grid, s.power]
+            };
+            for id in ids {
                 app.redraw(id);
             }
         }
@@ -773,6 +792,7 @@ impl Handler for GridH {
                     self.0.borrow_mut().grid_open = false;
                     let id = self.0.borrow().grid;
                     app.set_geom(id, -GRID_W * 2, (app.screen_h - GRID_H) / 2 - 40, GRID_W, GRID_H);
+                    app.ungrab_keyboard();
                     let parts: Vec<String> = exec
                         .split_whitespace()
                         .filter(|p| !(p.starts_with('%') && p.len() == 2))
@@ -788,6 +808,7 @@ impl Handler for GridH {
                 self.0.borrow_mut().grid_open = false;
                 let id = self.0.borrow().grid;
                 app.set_geom(id, -GRID_W * 2, (app.screen_h - GRID_H) / 2 - 40, GRID_W, GRID_H);
+                app.ungrab_keyboard();
             }
             _ => {}
         }
@@ -797,6 +818,7 @@ impl Handler for GridH {
             self.0.borrow_mut().grid_open = false;
             let id = self.0.borrow().grid;
             app.set_geom(id, -GRID_W * 2, (app.screen_h - GRID_H) / 2 - 40, GRID_W, GRID_H);
+            app.ungrab_keyboard();
             return true;
         }
         false
@@ -816,6 +838,7 @@ impl Handler for PowerH {
         let idx = ((y - 12) / 54).max(0) as usize;
         let id = self.0.borrow().power;
         app.set_geom(id, -POWER_W * 2, -POWER_H * 2, POWER_W, POWER_H);
+        app.ungrab_keyboard();
         // rows are 46px tall with 8px gaps: only trigger inside a row, so
         // margin/gap clicks just close the menu (never an accidental reboot)
         let in_row = (y - 12 - idx as i32 * 54) <= 46;
@@ -834,6 +857,7 @@ impl Handler for PowerH {
             // Escape closes the power menu without triggering anything
             let id = self.0.borrow().power;
             app.set_geom(id, -POWER_W * 2, -POWER_H * 2, POWER_W, POWER_H);
+            app.ungrab_keyboard();
             return true;
         }
         false
@@ -941,7 +965,10 @@ fn shell_main(mut app: App, root: u32) {
             panel,
             strut,
             6u32,
-            &[0u32, 0, PANEL_H as u32, 0, 0, 0, 0, sw as u32, 0, 0, 0, sw as u32],
+            // _NET_WM_STRUT_PARTIAL: left, right, top, bottom,
+            // left_start_y, left_end_y, right_start_y, right_end_y,
+            // top_start_x, top_end_x, bottom_start_x, bottom_end_x
+            &[0, 0, PANEL_H as u32, 0, 0, shh as u32, 0, shh as u32, 0, sw as u32, 0, 0],
         )
         .ok();
 
@@ -971,10 +998,13 @@ fn shell_main(mut app: App, root: u32) {
             dock,
             strut,
             6u32,
+            // reserve the dome band on the bottom edge, only across the
+            // dock's x range (proper _NET_WM_STRUT_PARTIAL field order)
             &[
                 0, 0, 0, 150,
-                0, 0, (sw / 2 - DOCK_W / 2) as u32, (sw / 2 + DOCK_W / 2) as u32,
-                0, 0, (shh - 150) as u32, shh as u32,
+                0, shh as u32, 0, shh as u32,
+                0, 0,
+                (sw / 2 - DOCK_W / 2) as u32, (sw / 2 + DOCK_W / 2) as u32,
             ],
         )
         .ok();

@@ -58,6 +58,8 @@ BRAVOS_DESIGN_PNG="${BRAVOS_DESIGN_PNG:-/home/z/my-project/upload/BraveOS.png}" 
 ASSETS="$BUILD_DIR/assets"
 # canonical wallpaper name used by the shell/wallpaper tool
 cp -f "$ASSETS/wallpaper-dark.png" "$ASSETS/braveos.png"
+cp -f "$ASSETS/wallpaper-light.png" "$ASSETS/braveos-light.png"
+cp -f "$ASSETS/wallpaper-aurora.png" "$ASSETS/braveos-aurora.png"
 
 # -----------------------------------------------------------------------------
 # 2. debootstrap - clean base
@@ -167,6 +169,8 @@ echo "$VERSION" > "$ROOTFS/usr/share/bravos/VERSION"
 cp "$ASSETS/wallpaper-dark.png" "$ASSETS/wallpaper-light.png" \
    "$ASSETS/wallpaper-aurora.png" "$ROOTFS/usr/share/bravos/wallpapers/" 2>/dev/null || true
 cp -f "$ASSETS/braveos.png" "$ROOTFS/usr/share/bravos/wallpapers/braveos.png" 2>/dev/null || true
+cp -f "$ASSETS/braveos-light.png" "$ROOTFS/usr/share/bravos/wallpapers/braveos-light.png" 2>/dev/null || true
+cp -f "$ASSETS/braveos-aurora.png" "$ROOTFS/usr/share/bravos/wallpapers/braveos-aurora.png" 2>/dev/null || true
 cp -f "$ASSETS/wallpaper-dark.png" "$ROOTFS/usr/share/backgrounds/bravos-dark.png"
 cp "$ASSETS"/icon-*.png "$ROOTFS/usr/share/bravos/icons/" 2>/dev/null || true
 cp "$ASSETS"/icon-*.png "$ROOTFS/usr/share/icons/hicolor/48x48/apps/" 2>/dev/null || true
