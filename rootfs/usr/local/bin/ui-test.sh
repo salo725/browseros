@@ -26,6 +26,14 @@ ok()   { echo "UITEST-PASS $1"; PASS=$((PASS+1)); }
 bad()  { echo "UITEST-FAIL $1 $2"; FAIL=$((FAIL+1)); }
 shot() { /usr/local/bin/bshot "/tmp/uitest-$1.png" >/dev/null 2>&1; }
 click(){ xdotool mousemove "$1" "$2" click 1; sleep "${3:-1.8}"; }
+# diagnostic: which window is under the pointer, and what happened to it
+diag(){ # diag <label> <x> <y>
+  xdotool mousemove "$2" "$3" >/dev/null 2>&1
+  W=$(xdotool getmouselocation --shell 2>/dev/null | sed -n 's/^WINDOW=//p')
+  C=$(xprop -id "${W:-0}" WM_CLASS 2>/dev/null | cut -d= -f2)
+  echo "UITEST-DIAG $1 ptr($2,$3) win=${W:-none} class=${C:-?}"
+  xdotool mousemove "$2" "$3" click 1 >/dev/null 2>&1
+}
 
 # 1) session processes
 BWM=$(pgrep -c -x bwm); BSHELL=$(pgrep -c -x bshell); BWALL=$(pgrep -c -x bwall)
@@ -76,7 +84,7 @@ pkill -x pcmanfm; sleep 0.5
 
 # 8) dock: app-grid button opens the on-screen grid (not the hidden one)
 GRID=$(xdotool search --class bshell-grid 2>/dev/null | head -1)
-click $(( SW / 2 + 105 )) $(( SH - 66 ))
+diag grid $(( SW / 2 + 105 )) $(( SH - 66 )); sleep 1.8
 sleep 0.6
 grid_on_screen() {
   [ -n "${1:-}" ] || return 1
@@ -128,7 +136,7 @@ pkill -x bsettings; sleep 0.5
 # 13) dock: outer arc — Moon toggles dark mode in the shell config
 mkdir -p ~/.config/bravos
 printf '{"language":"auto","dark":true}' > ~/.config/bravos/config.json
-click $(( SW / 2 - 131 )) $(( SH - 127 ))
+diag moon $(( SW / 2 - 131 )) $(( SH - 127 )); sleep 1.8
 if grep -qE '"dark": ?false' ~/.config/bravos/config.json 2>/dev/null; then
   ok "dock-moon-toggles-dark"
 else
@@ -136,7 +144,7 @@ else
 fi
 
 # 14) dock: outer arc — Power button opens the power menu popup
-click $(( SW / 2 + 69 )) $(( SH - 157 ))
+diag power $(( SW / 2 + 69 )) $(( SH - 157 )); sleep 1.8
 sleep 0.6
 PWIN=$(xdotool search --class bshell-power 2>/dev/null | head -1)
 if [ -n "${PWIN:-}" ] && grid_on_screen "$PWIN"; then
@@ -149,7 +157,7 @@ xdotool key --clearmodifiers Escape; sleep 0.5
 
 # 15) dock: outer arc — Lock button runs the screen locker (killed for the
 #     sake of the remaining checks)
-click $(( SW / 2 + 131 )) $(( SH - 127 )) 1.2
+diag lock $(( SW / 2 + 131 )) $(( SH - 127 )); sleep 1.2
 LK=$(pgrep -c -x xtrlock)
 if [ "$LK" -ge 1 ]; then ok "dock-lock-runs-xtrlock"; else bad "dock-lock" "no xtrlock"; fi
 pkill -x xtrlock; sleep 0.5
@@ -166,6 +174,15 @@ touch /tmp/.bravos-config-stamp
 
 # 17) RAM bookkeeping
 free -b | awk 'NR==2{printf "MEMB %s %s", $2, $7}'
+
+for sh in grid moon power lock; do
+  if [ -f "/tmp/uitest-$sh.png" ]; then
+    echo "UITEST-SHOT-BEGIN $sh"
+    base64 -w0 "/tmp/uitest-$sh.png" 2>/dev/null
+    echo ""
+    echo "UITEST-SHOT-END $sh"
+  fi
+done
 
 echo "UITEST-DONE pass=$PASS fail=$FAIL"
 [ "$FAIL" -eq 0 ]

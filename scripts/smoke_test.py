@@ -245,18 +245,27 @@ def main():
     # idle RAM is measured inside ui-test (IDLERAM marker, printed before any
     # app launches) — checked after ui-functional below.
 
-    # process checks
-    child.sendline("echo XORG:$(pgrep -c -x Xorg) BWM:$(pgrep -c -x bwm) "
-                   "BSHELL:$(pgrep -c -x bshell) BWALL:$(pgrep -c -x bwall) "
-                   "PICOM:$(pgrep -c -x picom)")
-    try:
-        child.expect(r"XORG:(\d+) BWM:(\d+) BSHELL:(\d+) BWALL:(\d+) PICOM:(\d+)",
-                     timeout=30)
-        counts = [int(child.match.group(i)) for i in range(1, 6)]
+    # process checks (retry: bwm/bshell start right after the marker, so the
+    # first pgrep may race ahead of them - up to ~25s)
+    counts = None
+    for attempt in range(10):
+        child.sendline("echo XORG:$(pgrep -c -x Xorg) BWM:$(pgrep -c -x bwm) "
+                       "BSHELL:$(pgrep -c -x bshell) BWALL:$(pgrep -c -x bwall) "
+                       "PICOM:$(pgrep -c -x picom)")
+        try:
+            child.expect(r"XORG:(\d+) BWM:(\d+) BSHELL:(\d+) BWALL:(\d+) PICOM:(\d+)",
+                         timeout=20)
+            counts = [int(child.match.group(i)) for i in range(1, 6)]
+            if counts[0] >= 1 and counts[1] >= 1 and counts[2] >= 1 and counts[3] >= 1:
+                break
+        except pexpect.TIMEOUT:
+            counts = None
+        time.sleep(2.5)
+    if counts:
         check("session-processes",
               counts[0] >= 1 and counts[1] >= 1 and counts[2] >= 1 and counts[3] >= 1,
               "Xorg=%d bwm=%d bshell=%d bwall=%d picom=%d" % tuple(counts))
-    except pexpect.TIMEOUT:
+    else:
         check("session-processes", False, "no pgrep output")
 
     time.sleep(2)
@@ -273,6 +282,23 @@ def main():
     except pexpect.TIMEOUT:
         check("ui-functional", False, "no UITEST-DONE (crash or hang)")
     child.sendline("pkill -x bsettings 2>/dev/null; pkill -x xterm 2>/dev/null; true")
+
+    # pull the guest's diagnostic screenshots (UITEST-SHOT base64 blocks)
+    import base64 as _b64
+    try:
+        log_data = open(os.path.join(OUT, "serial-log.txt"), errors="replace").read()
+        for m in re.finditer(r"UITEST-SHOT-BEGIN (\S+)\n([A-Za-z0-9+/=\s]+?)\nUITEST-SHOT-END \1",
+                             log_data):
+            name, data = m.group(1), m.group(2).replace("\n", "").replace(" ", "")
+            try:
+                png = _b64.b64decode(data)
+                path = os.path.join(OUT, "uitest-%s.png" % name)
+                open(path, "wb").write(png)
+                print("[smoke] pulled guest screenshot %s (%d KB)" % (name, len(png) // 1024))
+            except Exception as e:
+                print("[smoke] screenshot %s decode failed: %s" % (name, e))
+    except OSError:
+        pass
 
     # idle RAM from the guest ui-test's IDLERAM marker (pre-launch state)
     pair = None
@@ -366,7 +392,20 @@ def finish(child, ok):
             print("===== END SERIAL TAIL =====")
         except OSError:
             print("(serial log unavailable)")
+    # capture the guest's UITEST-MEM breakdown lines into the ram report
+    mem_lines = []
+    try:
+        with open(os.path.join(OUT, "serial-log.txt"), errors="replace") as f:
+            for ln in f:
+                if "UITEST-MEM " in ln:
+                    mem_lines.append(ln.split("UITEST-MEM ", 1)[1].rstrip())
+    except OSError:
+        pass
+
     with open(os.path.join(OUT, "ram-report.txt"), "w") as f:
+        for ml in mem_lines:
+            f.write(ml + "\n")
+        f.write("\n")
         json.dump(results, f, indent=2)
     print(json.dumps(results, indent=2))
     print("[smoke] overall:", "PASS" if ok else "FAIL")

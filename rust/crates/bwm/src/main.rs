@@ -314,13 +314,21 @@ impl Wm {
             .ok();
     }
 
+    fn set_window_prop(&self, win: Window, prop: &str, data: &[u32]) {
+        self.conn
+            .change_property32(PropMode::REPLACE, win, self.atom(prop), 33 /* XA_WINDOW */, data)
+            .ok();
+    }
+
     fn update_client_list(&self) {
         let wins: Vec<u32> = self.clients.iter().map(|c| c.win).collect();
         let stacked: Vec<u32> = self.clients.iter().map(|c| c.win).collect();
-        self.set_u32_prop(self.root, "_NET_CLIENT_LIST", &wins);
-        self.set_u32_prop(self.root, "_NET_CLIENT_LIST_STACKING", &stacked);
+        // EWMH: these are window lists - the property type must be XA_WINDOW
+        // (writing CARDINAL made xprop/pagers print them as plain integers)
+        self.set_window_prop(self.root, "_NET_CLIENT_LIST", &wins);
+        self.set_window_prop(self.root, "_NET_CLIENT_LIST_STACKING", &stacked);
         let active = self.focused.unwrap_or(0);
-        self.set_u32_prop(self.root, "_NET_ACTIVE_WINDOW", &[active]);
+        self.set_window_prop(self.root, "_NET_ACTIVE_WINDOW", &[active]);
     }
 
     fn update_desktop_props(&self) {

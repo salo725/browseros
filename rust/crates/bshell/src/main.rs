@@ -1014,6 +1014,7 @@ fn shell_main(mut app: App, root: u32) {
             title: "bravos-power",
             event_mask: bui::xapp::EventMask::EXPOSURE
                 | bui::xapp::EventMask::BUTTON_PRESS
+                | bui::xapp::EventMask::KEY_PRESS
                 | bui::xapp::EventMask::STRUCTURE_NOTIFY,
         },
         Box::new(PowerH(shell.clone())),
