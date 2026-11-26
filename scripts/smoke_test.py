@@ -141,7 +141,7 @@ def main():
         img = os.path.join(OUT, "usb.img")
         print("[smoke] copying ISO to raw disk image %s" % img)
         shutil.copyfile(ISO, img)
-        cmd += ["-drive", "file=%s,format=raw,if=ahci,media=disk" % img,
+        cmd += ["-drive", "file=%s,format=raw,media=disk" % img,
                 "-boot", "c"]
         if MODE == "uefi":
             ovmf = None
