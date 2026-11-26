@@ -16,9 +16,15 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, "/usr/share/bravos/py")
+from bravos_i18n import I18n
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Gdk
+
+i18n = I18n("installer")
+tr = i18n.tr
 
 BRAND = "#f04e23"
 
@@ -187,13 +193,13 @@ class InstallerSteps:
 
 class InstallerWindow(Gtk.Window):
     def __init__(self, dry=False):
-        super().__init__(title="Install BraveOS")
+        super().__init__(title=tr("inst_title", "Install BraveOS"))
         self.dry = dry
         self.set_default_size(640, 480)
         self.set_resizable(False)
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
-        header.set_title("Install BraveOS")
+        header.set_title(tr("inst_title", "Install BraveOS"))
         self.set_titlebar(header)
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
@@ -230,21 +236,21 @@ class InstallerWindow(Gtk.Window):
     # ---------- pages
     def build_welcome(self):
         page = self.vbox("welcome")
-        self.head(page, "Welcome to BraveOS",
-                  "Install the Brave Browser Distribution onto this computer.")
+        self.head(page, tr("inst_welcome_t", "Welcome to BraveOS"),
+                  tr("inst_welcome_s", "Install the Brave Browser Distribution onto this computer."))
         body = Gtk.Label(xalign=0)
         body.set_wrap(True)
-        body.set_markup(
+        body.set_markup(tr("inst_body",
             "This installer <b>erases one disk</b> and installs BraveOS with:\n"
             "  • Brave browser, Files, BraveOS Settings\n"
             "  • Linux kernel with drivers for 2008–2022 hardware\n"
             "  • GRUB bootloader (BIOS and UEFI)\n\n"
-            "Everything runs offline from this USB; the network is not needed.")
+            "Everything runs offline from this USB; the network is not needed."))
         page.pack_start(body, True, True, 6)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        cancel = Gtk.Button(label="Quit")
+        cancel = Gtk.Button(label=tr("inst_quit", "Quit"))
         cancel.connect("clicked", lambda *_: self.destroy())
-        nxt = Gtk.Button(label="Continue")
+        nxt = Gtk.Button(label=tr("inst_continue", "Continue"))
         nxt.get_style_context().add_class("suggested-action")
         nxt.connect("clicked", lambda *_: self.stack.set_visible_child_name("disk"))
         row.pack_end(nxt, False, False, 0)
@@ -253,8 +259,8 @@ class InstallerWindow(Gtk.Window):
 
     def build_disk(self):
         page = self.vbox("disk")
-        self.head(page, "Choose the target disk",
-                  "ALL DATA on the selected disk will be destroyed.")
+        self.head(page, tr("inst_disk_t", "Choose the target disk"),
+                  tr("inst_disk_s", "ALL DATA on the selected disk will be destroyed."))
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         page.pack_start(box, True, True, 0)
         self.disk_combo = Gtk.ComboBoxText()
@@ -265,19 +271,19 @@ class InstallerWindow(Gtk.Window):
             disks = []
             self.disk_info.set_text("disk probe failed: %s" % e)
         if not disks:
-            self.disk_info.set_text("No disks found (or probe failed).")
+            self.disk_info.set_text(tr("inst_no_disks", "No disks found."))
         for name, size, model, tran in disks:
             self.disk_combo.append_text("%s  [%s]  %s %s" % (name, size, model, tran))
         if disks:
             self.disk_combo.set_active(0)
-        box.pack_start(Gtk.Label(label="Disk to erase and install BraveOS:"),
+        box.pack_start(Gtk.Label(label=tr("inst_disk_choose", "Disk to erase and install BraveOS:")),
                        False, False, 4)
         box.pack_start(self.disk_combo, False, False, 4)
         box.pack_start(self.disk_info, False, False, 4)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        back = Gtk.Button(label="Back")
-        nxt = Gtk.Button(label="Continue")
+        back = Gtk.Button(label=tr("inst_back", "Back"))
+        nxt = Gtk.Button(label=tr("inst_continue", "Continue"))
         nxt.get_style_context().add_class("suggested-action")
         back.connect("clicked", lambda *_: self.stack.set_visible_child_name("welcome"))
         nxt.connect("clicked", lambda *_: self.stack.set_visible_child_name("options"))
@@ -291,18 +297,19 @@ class InstallerWindow(Gtk.Window):
 
     def build_options(self):
         page = self.vbox("options")
-        self.head(page, "System options", "hostname and your password")
+        self.head(page, tr("inst_options_t", "System options"),
+                  tr("inst_options_s", "hostname and your password"))
         grid = Gtk.Grid(column_spacing=12, row_spacing=12)
         page.pack_start(grid, True, True, 0)
-        grid.attach(Gtk.Label(label="Hostname", xalign=0), 0, 0, 1, 1)
+        grid.attach(Gtk.Label(label=tr("inst_hostname", "Hostname"), xalign=0), 0, 0, 1, 1)
         self.host_entry = Gtk.Entry()
         self.host_entry.set_text("braveos")
         grid.attach(self.host_entry, 1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="Password for user 'brave'", xalign=0), 0, 1, 1, 1)
+        grid.attach(Gtk.Label(label=tr("inst_pw_label", "Password for user 'brave'"), xalign=0), 0, 1, 1, 1)
         self.pw_entry = Gtk.Entry()
         self.pw_entry.set_visibility(False)
         grid.attach(self.pw_entry, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="Repeat password", xalign=0), 0, 2, 1, 1)
+        grid.attach(Gtk.Label(label=tr("inst_pw2", "Repeat password"), xalign=0), 0, 2, 1, 1)
         self.pw2_entry = Gtk.Entry()
         self.pw2_entry.set_visibility(False)
         grid.attach(self.pw2_entry, 1, 2, 1, 1)
@@ -311,8 +318,8 @@ class InstallerWindow(Gtk.Window):
         grid.attach(self.opt_error, 0, 3, 2, 1)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        back = Gtk.Button(label="Back")
-        nxt = Gtk.Button(label="Continue")
+        back = Gtk.Button(label=tr("inst_back", "Back"))
+        nxt = Gtk.Button(label=tr("inst_continue", "Continue"))
         nxt.get_style_context().add_class("suggested-action")
         back.connect("clicked", lambda *_: self.stack.set_visible_child_name("disk"))
         nxt.connect("clicked", self.check_options)
@@ -325,28 +332,32 @@ class InstallerWindow(Gtk.Window):
         pw = self.pw_entry.get_text()
         pw2 = self.pw2_entry.get_text()
         if not self.dry and len(pw) < 4:
-            self.opt_error.set_markup("<span color='#ff7a45'>"
-                                      "Password must be at least 4 characters.</span>")
+            self.opt_error.set_markup("<span color='#ff7a45'>%s</span>" %
+                                      tr("inst_err_pw_short",
+                                         "Password must be at least 4 characters."))
             return
         if pw != pw2:
-            self.opt_error.set_markup("<span color='#ff7a45'>"
-                                      "Passwords do not match.</span>")
+            self.opt_error.set_markup("<span color='#ff7a45'>%s</span>" %
+                                      tr("inst_err_pw_match",
+                                         "Passwords do not match."))
             return
         self.stack.set_visible_child_name("confirm")
 
     def build_confirm(self):
         page = self.vbox("confirm")
-        self.head(page, "Ready to install", "one last check")
+        self.head(page, tr("inst_confirm_t", "Ready to install"),
+                  tr("inst_confirm_s", "one last check"))
         self.confirm_label = Gtk.Label(xalign=0)
         self.confirm_label.set_wrap(True)
         self.confirm_label.connect("map", self.update_confirm)
         page.pack_start(self.confirm_label, True, True, 0)
         self.confirm_check = Gtk.CheckButton(
-            label="I understand that ALL DATA on the target disk will be erased")
+            label=tr("inst_confirm_check",
+                     "I understand that ALL DATA on the target disk will be erased"))
         page.pack_end(self.confirm_check, False, False, 6)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        back = Gtk.Button(label="Back")
-        go = Gtk.Button(label="Install now")
+        back = Gtk.Button(label=tr("inst_back", "Back"))
+        go = Gtk.Button(label=tr("inst_install_now", "Install now"))
         go.get_style_context().add_class("destructive-action")
         back.connect("clicked", lambda *_: self.stack.set_visible_child_name("options"))
         go.connect("clicked", self.start_install)
@@ -356,21 +367,24 @@ class InstallerWindow(Gtk.Window):
 
     def update_confirm(self, *_):
         d = self.selected_disk() or "(none selected)"
-        mode = "DRY RUN (no changes)" if self.dry else "REAL INSTALL"
+        mode = tr("inst_dry_run", "DRY RUN (no changes)") if self.dry \
+            else tr("inst_real", "REAL INSTALL")
         self.confirm_label.set_markup(
-            "Target disk: <b>%s</b>\nHostname: <b>%s</b>\nMode: <b>%s</b>\n\n"
-            "The disk will be repartitioned (GPT): 512 MiB EFI + 1 MiB BIOS boot "
-            "+ root. GRUB will be installed for BIOS and UEFI."
+            tr("inst_confirm_body",
+               "Target disk: <b>%s</b>\nHostname: <b>%s</b>\nMode: <b>%s</b>\n\n"
+               "The disk will be repartitioned (GPT): 512 MiB EFI + 1 MiB BIOS boot "
+               "+ root. GRUB will be installed for BIOS and UEFI.")
             % (d, self.host_entry.get_text() or "braveos", mode))
 
     def build_progress(self):
         page = self.vbox("progress")
-        self.head(page, "Installing…", "this takes several minutes")
+        self.head(page, tr("inst_progress_t", "Installing…"),
+                  tr("inst_progress_s", "this takes several minutes"))
         self.pbar = Gtk.ProgressBar()
         self.pbar.set_margin_top(6)
         page.pack_start(self.pbar, False, False, 0)
         self.status = Gtk.Label(xalign=0)
-        self.status.set_markup("Starting…")
+        self.status.set_markup(tr("inst_starting", "Starting…"))
         self.status.set_wrap(True)
         page.pack_start(self.status, True, True, 8)
         self.logview = Gtk.TextView()
@@ -383,20 +397,21 @@ class InstallerWindow(Gtk.Window):
 
     def build_done(self):
         page = self.vbox("done")
-        self.head(page, "Installation complete",
-                  "BraveOS is installed and ready.")
+        self.head(page, tr("inst_done_t", "Installation complete"),
+                  tr("inst_done_s", "BraveOS is installed and ready."))
         msg = Gtk.Label(xalign=0)
         msg.set_wrap(True)
-        msg.set_markup("Remove the USB stick and <b>Reboot</b> to start your "
-                       "new system. The live session keeps running if you "
-                       "want to keep testing.")
+        msg.set_markup(tr("inst_done_body",
+                           "Remove the USB stick and <b>Reboot</b> to start your "
+                           "new system. The live session keeps running if you "
+                           "want to keep testing."))
         page.pack_start(msg, True, True, 0)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.reboot_btn = Gtk.Button(label="Reboot now")
+        self.reboot_btn = Gtk.Button(label=tr("inst_reboot_now", "Reboot now"))
         self.reboot_btn.get_style_context().add_class("suggested-action")
         self.reboot_btn.set_sensitive(False)
-        self.reboot_btn.connect("clicked", lambda *_: os.system("systemctl reboot"))
-        close = Gtk.Button(label="Close")
+        self.reboot_btn.connect("clicked", lambda *_: os.system("bravos-power reboot"))
+        close = Gtk.Button(label=tr("inst_close", "Close"))
         close.connect("clicked", lambda *_: self.destroy())
         row.pack_end(self.reboot_btn, False, False, 0)
         row.pack_end(close, False, False, 0)
@@ -407,7 +422,8 @@ class InstallerWindow(Gtk.Window):
         if not self.confirm_check.get_active():
             self.confirm_label.set_markup(
                 self.confirm_label.get_markup()
-                + "\n<span color='#ff7a45'>Tick the confirmation box first.</span>")
+                + "\n<span color='#ff7a45'>%s</span>" %
+                tr("inst_err_tick", "Tick the confirmation box first."))
             return
         disk = self.selected_disk()
         if not disk:
@@ -450,9 +466,10 @@ class InstallerWindow(Gtk.Window):
         try:
             self.steps.run_all()
             self._ok = True
-            self.log_q.put((1.0, "Done."))
+            self.log_q.put((1.0, tr("inst_done", "Done.")))
         except Exception as e:
-            self.log_q.put((None, "INSTALL FAILED: %s" % e))
+            self.log_q.put((None, "%s %s" % (
+                tr("inst_failed", "INSTALL FAILED:"), e)))
             self.log_q.put((None, "See log above; report with the serial "
                                   "console if you filed a bug."))
 

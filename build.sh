@@ -43,6 +43,15 @@ python3 "$REPO_DIR/scripts/gen_assets.py" "$BUILD_DIR/assets"
 ASSETS="$BUILD_DIR/assets"
 
 # -----------------------------------------------------------------------------
+# 1b. Build BraveWM (our C++17/Xlib/Cairo/Pango window manager)
+# -----------------------------------------------------------------------------
+pkg-config --exists pangocairo || fail "host missing libpango1.0-dev (pangocairo)"
+log "building BraveWM"
+make -C "$REPO_DIR/wm" clean
+make -C "$REPO_DIR/wm" -j"$(nproc)"
+make -C "$REPO_DIR/wm" install DESTDIR="$BUILD_DIR/wm-stage"
+
+# -----------------------------------------------------------------------------
 # 2. debootstrap - clean base
 # -----------------------------------------------------------------------------
 # older hosts may not know the bookworm suite; the generic 'gutsy' template
@@ -126,6 +135,13 @@ run_in_rootfs apt-get -f install -y
 # -----------------------------------------------------------------------------
 log "copying overlay files"
 cp -a "$OVERLAY/." "$ROOTFS/"
+
+# BraveWM binary + translations
+install -Dm755 "$BUILD_DIR/wm-stage/usr/local/bin/bravos-wm" \
+  "$ROOTFS/usr/local/bin/bravos-wm"
+mkdir -p "$ROOTFS/usr/share/bravos/i18n"
+cp -a "$REPO_DIR/rootfs/usr/share/bravos/i18n/." "$ROOTFS/usr/share/bravos/i18n/"
+
 
 # Generated assets into rootfs
 mkdir -p "$ROOTFS/usr/share/bravos/wallpapers" \

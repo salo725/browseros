@@ -29,7 +29,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             debootstrap squashfs-tools xorriso grub-pc-bin grub-common \
             grub2-common grub-efi-amd64-bin mtools librsvg2-bin curl \
-            ca-certificates gnupg python3-pil
+            ca-certificates gnupg python3-pil python3-cairo python3-numpy \
+            build-essential pkg-config libx11-dev libxext-dev \
+            libxinerama-dev libcairo2-dev libpango1.0-dev
           sudo mkdir -p /mnt/bravos-build
           sudo chown "$USER:$USER" /mnt/bravos-build
 

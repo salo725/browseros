@@ -219,15 +219,16 @@ def main():
         check("idle-ram", False, "no free output")
 
     # process checks
-    child.sendline("echo XORG:$(pgrep -c -x Xorg) OB:$(pgrep -c -x openbox) "
-                   "TINT2:$(pgrep -c -x tint2) PICOM:$(pgrep -c -x picom) "
+    child.sendline("echo XORG:$(pgrep -c -x Xorg) WM:$(pgrep -c -x bravos-wm) "
+                   "DOCK:$(pgrep -c -x bravos-dock) PICOM:$(pgrep -c -x picom) "
                    "PCMANFM:$(pgrep -c -f 'pcmanfm --desktop')")
     try:
-        child.expect(r"XORG:(\d+) OB:(\d+) TINT2:(\d+) PICOM:(\d+) PCMANFM:(\d+)",
+        child.expect(r"XORG:(\d+) WM:(\d+) DOCK:(\d+) PICOM:(\d+) PCMANFM:(\d+)",
                      timeout=30)
         counts = [int(child.match.group(i)) for i in range(1, 6)]
-        check("session-processes", counts[0] >= 1 and counts[1] >= 1,
-              "Xorg=%d openbox=%d tint2=%d picom=%d pcmanfm=%d" % tuple(counts))
+        check("session-processes", counts[0] >= 1 and counts[1] >= 1 and
+              counts[2] >= 1,
+              "Xorg=%d bravos-wm=%d bravos-dock=%d picom=%d pcmanfm=%d" % tuple(counts))
     except pexpect.TIMEOUT:
         check("session-processes", False, "no pgrep output")
 

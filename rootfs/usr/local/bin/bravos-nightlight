@@ -1,0 +1,46 @@
+#!/bin/bash
+# bravos-nightlight — toggle the night light (warm display gamma) for BraveOS.
+# usage: bravos-nightlight {toggle|on|off|status}
+set -u
+MARK="$HOME/.config/bravos/nightlight"
+mkdir -p "$HOME/.config/bravos"
+
+set_warm() {
+    for out in $(xrandr --query 2>/dev/null | awk '$2 ~ /connected/ {print $1}'); do
+        xrandr --output "$out" --gamma 1.0:0.82:0.62 >/dev/null 2>&1
+    done
+}
+
+set_normal() {
+    for out in $(xrandr --query 2>/dev/null | awk '$2 ~ /connected/ {print $1}'); do
+        xrandr --output "$out" --gamma 1:1:1 >/dev/null 2>&1
+    done
+}
+
+ACTION="${1:-toggle}"
+case "$ACTION" in
+    on)
+        set_warm
+        touch "$MARK"
+        ;;
+    off)
+        set_normal
+        rm -f "$MARK"
+        ;;
+    toggle)
+        if [ -e "$MARK" ]; then
+            set_normal
+            rm -f "$MARK"
+        else
+            set_warm
+            touch "$MARK"
+        fi
+        ;;
+    status)
+        [ -e "$MARK" ] && echo on || echo off
+        ;;
+    *)
+        echo "usage: bravos-nightlight {toggle|on|off|status}" >&2
+        exit 2
+        ;;
+esac

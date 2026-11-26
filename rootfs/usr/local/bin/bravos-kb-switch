@@ -1,0 +1,44 @@
+#!/bin/bash
+# bravos-kb-switch — cycle the active keyboard layout (bravos-wm Ctrl+Shift).
+# Layouts come from /usr/share/bravos/bravos-wm.conf (kb_layouts=us,ar,...)
+# or /etc/default/keyboard (XKBLAYOUT). The current layout is published to
+# /tmp/bravos-kb-layout so the BraveWM top bar can display it.
+set -u
+
+layout_list() {
+    for f in "${XDG_CONFIG_HOME:-$HOME/.config}/bravos/bravos-wm.conf" \
+             /usr/share/bravos/bravos-wm.conf; do
+        if [ -r "$f" ]; then
+            L=$(grep -E '^\s*kb_layouts\s*=' "$f" | tail -1 | cut -d= -f2 | tr -d ' "')
+            [ -n "${L:-}" ] && { echo "$L"; return; }
+        fi
+    done
+    grep -E '^\s*XKBLAYOUT' /etc/default/keyboard 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d ' '
+}
+
+LIST="$(layout_list | head -1)"
+[ -n "$LIST" ] || LIST="us"
+
+OLD="us"
+if [ -r /tmp/bravos-kb-layout ]; then
+    OLD=$(cat /tmp/bravos-kb-layout)
+fi
+
+# find the next layout after $OLD (wrap around)
+NEXT=""
+FIRST=""
+FOUND=0
+IFS=',' read -ra PARTS <<<"$LIST"
+for p in "${PARTS[@]}"; do
+    [ -z "$p" ] && continue
+    [ -z "$FIRST" ] && FIRST="$p"
+    if [ "$FOUND" = "1" ] && [ -z "$NEXT" ]; then NEXT="$p"; fi
+    [ "$p" = "$OLD" ] && FOUND=1
+done
+[ -z "$FIRST" ] && FIRST="us"
+[ -z "$NEXT" ] && NEXT="$FIRST"
+
+if command -v setxkbmap >/dev/null 2>&1; then
+    setxkbmap "$NEXT" >/dev/null 2>&1 || true
+fi
+echo "$NEXT" > /tmp/bravos-kb-layout

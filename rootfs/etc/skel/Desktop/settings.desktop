@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=BraveOS Settings
+Comment=Display, network, sound, Brave, storage, power
+Exec=bravos-settings
+Icon=/usr/share/bravos/icons/icon-settings.png
+Terminal=false

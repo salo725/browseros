@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""bravos-osd — BraveOS on-screen display for volume/brightness changes.
+
+A small rounded dark-glass popup (bottom-center, above the dock) that shows
+an icon + progress bar, fades out after ~1.2 s. Pure GTK3 + Cairo.
+
+usage: bravos-osd volume {up|down|mute}     (adjusts, then shows the OSD)
+       bravos-osd show volume <0-100> [muted]
+"""
+import math
+import os
+import subprocess
+import sys
+import time
+
+import cairo
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+ACCENT = (240 / 255, 78 / 255, 35 / 255)
+
+
+def get_volume():
+    """Returns (percent, muted) using pactl, or (None, None)."""
+    try:
+        out = subprocess.check_output(
+            ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
+            timeout=2).decode()
+        pct = int([t for t in out.replace("%", " ").split()
+                   if t.isdigit()][0])
+        mout = subprocess.check_output(
+            ["pactl", "get-sink-mute", "@DEFAULT_SINK@"],
+            timeout=2).decode().strip().lower()
+        muted = "yes" in mout
+        return pct, muted
+    except Exception:
+        return None, None
+
+
+class Osd(Gtk.Window):
+    def __init__(self, kind, pct, muted=False):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.kind = kind
+        self.pct = pct
+        self.muted = muted
+        self.opacity = 1.0
+        self.set_decorated(False)
+        self.set_app_paintable(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_keep_above(True)
+        self.set_name("bravososd")
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None:
+            self.set_visual(visual)
+
+        self.w, self.h = 320, 96
+        self.set_size_request(self.w, self.h)
+        self.connect("draw", self.on_draw)
+
+        mon = screen.get_monitor_geometry(screen.get_primary_monitor())
+        self.move(mon.x + (mon.width - self.w) // 2,
+                  mon.y + mon.height - self.h - 190)
+
+        self.show_all()
+        GLib.timeout_add(1200, self.begin_fade)
+
+    def begin_fade(self):
+        GLib.timeout_add(33, self.fade_step)
+        return False
+
+    def fade_step(self):
+        self.opacity -= 0.08
+        if self.opacity <= 0:
+            self.destroy()
+            Gtk.main_quit()
+            return False
+        self.set_opacity(max(0.0, self.opacity))
+        return True
+
+    def on_draw(self, w, cr):
+        W, H = self.w, self.h
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+
+        # glass card
+        r = 20
+        cr.set_source_rgba(15 / 255, 12 / 255, 30 / 255, 0.82)
+        x0, y0 = 14, 0
+        cr.move_to(x0 + r, y0)
+        cr.arc(x0 + W - 28 - r, y0 + r, r, -math.pi / 2, 0)
+        cr.arc(x0 + W - 28 - r, y0 + H - r, r, 0, math.pi / 2)
+        cr.arc(x0 + r, y0 + H - r, r, math.pi / 2, math.pi)
+        cr.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, 0.10)
+        cr.set_line_width(1.2)
+        cr.new_sub_path()
+        cr.move_to(x0 + r, y0 + 0.5)
+        cr.arc(x0 + W - 28 - r, y0 + r, r, -math.pi / 2, 0)
+        cr.arc(x0 + W - 28 - r, y0 + H - r, r, 0, math.pi / 2)
+        cr.arc(x0 + r, y0 + H - r, r, math.pi / 2, math.pi)
+        cr.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+        cr.stroke()
+
+        # icon (speaker) + bar
+        cx, cy = 46, H / 2
+        cr.set_source_rgb(1, 1, 1)
+        # speaker body
+        cr.new_sub_path()
+        cr.move_to(cx - 16, cy - 6)
+        cr.line_to(cx - 8, cy - 6)
+        cr.line_to(cx + 1, cy - 15)
+        cr.line_to(cx + 1, cy + 15)
+        cr.line_to(cx - 8, cy + 6)
+        cr.line_to(cx - 16, cy + 6)
+        cr.close_path()
+        cr.fill()
+        if not self.muted:
+            cr.set_line_width(2.2)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.new_sub_path()
+            cr.arc(cx + 3, cy, 8, -math.pi / 3, math.pi / 3)
+            cr.stroke()
+            cr.new_sub_path()
+            cr.arc(cx + 3, cy, 13, -math.pi / 3, math.pi / 3)
+            cr.stroke()
+        else:
+            cr.set_line_width(2.4)
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.new_sub_path()
+            cr.move_to(cx + 8, cy - 9)
+            cr.line_to(cx + 20, cy + 9)
+            cr.move_to(cx + 20, cy - 9)
+            cr.line_to(cx + 8, cy + 9)
+            cr.stroke()
+
+        # progress bar
+        bx0, by0, bw, bh = 82, H / 2 - 5, W - 82 - 40, 10
+        cr.set_source_rgba(1, 1, 1, 0.14)
+        cr.new_sub_path()
+        self._rrect(cr, bx0, by0, bw, bh, bh / 2)
+        cr.fill()
+        fw = max(bh, bw * (0 if self.muted else self.pct) / 100.0)
+        cr.set_source_rgb(*ACCENT)
+        cr.new_sub_path()
+        self._rrect(cr, bx0, by0, fw, bh, bh / 2)
+        cr.fill()
+
+        # percent text
+        cr.set_source_rgb(1, 1, 1)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
+                            cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(13)
+        label = "MUTE" if self.muted else "%d%%" % self.pct
+        cr.move_to(bx0 + bw + 26, H / 2 + 5)
+        cr.show_text(label)
+        return True
+
+    @staticmethod
+    def _rrect(cr, x, y, w, h, r):
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print("usage: bravos-osd volume {up|down|mute} | "
+              "show volume <0-100> [muted]")
+        return 2
+    kind = args[0]
+    if kind == "volume" and len(args) > 1 and args[1] in ("up", "down", "mute"):
+        # apply the change first (idempotent with the WM's media keys)
+        cmd = {"up": "+5%", "down": "-5%", "mute": "toggle"}[args[1]]
+        subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_S@", cmd],
+                       timeout=2)
+        if args[1] == "mute":
+            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_S@",
+                            "toggle"], timeout=2)
+        pct, muted = get_volume()
+        if pct is None:
+            return 1
+        win = Osd("volume", pct, muted)
+        Gtk.main()
+    elif kind == "show" and len(args) >= 3 and args[1] == "volume":
+        pct = max(0, min(100, int(args[2])))
+        muted = len(args) > 3 and args[3] == "muted"
+        win = Osd("volume", pct, muted)
+        Gtk.main()
+    else:
+        print("usage: bravos-osd volume {up|down|mute} | "
+              "show volume <0-100> [muted]")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

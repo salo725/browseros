@@ -1,0 +1,23 @@
+// BraveOS polkit rules: let active local desktop users manage power and
+// (in the live session) run the installer without extra dialogs.
+polkit.addRule(function (action, subject) {
+    var powerActions = [
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.login1.reboot-multiple-sessions",
+        "org.freedesktop.login1.suspend",
+        "org.freedesktop.login1.suspend-multiple-sessions",
+        "org.freedesktop.login1.hibernate"
+    ];
+    if (powerActions.indexOf(action.id) >= 0 &&
+        subject.isInGroup("users")) {
+        return polkit.Result.YES;
+    }
+    // live session: the desktop installer may run for anyone at the console
+    if (action.id.indexOf("org.debian.apt") === 0 &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

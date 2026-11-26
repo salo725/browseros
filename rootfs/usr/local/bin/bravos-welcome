@@ -9,19 +9,25 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, "/usr/share/bravos/py")
+from bravos_i18n import I18n
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
 
+i18n = I18n("welcome")
+tr = i18n.tr
+
 
 class Welcome(Gtk.Window):
     def __init__(self):
-        super().__init__(title="Welcome to BraveOS")
+        super().__init__(title=tr("wel_title", "Welcome to BraveOS"))
         self.set_default_size(560, 330)
         self.set_resizable(False)
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
-        header.set_title("Welcome to BraveOS")
+        header.set_title(tr("wel_title", "Welcome to BraveOS"))
         self.set_titlebar(header)
 
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -39,10 +45,11 @@ class Welcome(Gtk.Window):
 
         info = Gtk.Label(xalign=0)
         info.set_wrap(True)
-        info.set_markup("You are running the <b>live session</b>. Nothing "
-                        "has been installed yet. Try everything — Brave, "
-                        "Files, Settings — then install when you are ready. "
-                        "Installing erases one disk of your choice.")
+        info.set_markup(tr("wel_info",
+                           "You are running the <b>live session</b>. Nothing "
+                           "has been installed yet. Try everything — Brave, "
+                           "Files, Settings — then install when you are ready. "
+                           "Installing erases one disk of your choice."))
         v.pack_start(info, False, False, 4)
 
         grid = Gtk.Grid(column_spacing=10, row_spacing=10)
@@ -70,19 +77,23 @@ class Welcome(Gtk.Window):
             return b
 
         tile(0, "/usr/share/bravos/icons/icon-brave.png",
-             "Use Brave now", "the system's core app, preconfigured",
+             tr("wel_use_brave_t", "Use Brave now"),
+             tr("wel_use_brave_d", "the system's core app, preconfigured"),
              lambda *_: self.go(["brave", "--maximized", "--no-first-run"]))
         tile(1, "/usr/share/bravos/icons/icon-folder.png",
-             "Browse files", "PCManFM file manager",
+             tr("wel_files_t", "Browse files"),
+             tr("wel_files_d", "PCManFM file manager"),
              lambda *_: self.go(["pcmanfm"]))
         tile(2, "/usr/share/bravos/icons/icon-installer.png",
-             "Install BraveOS to disk", "guided installer — erases one disk",
+             tr("wel_install_t", "Install BraveOS to disk"),
+             tr("wel_install_d", "guided installer — erases one disk"),
              self.install, suggested=True)
 
         note = Gtk.Label()
-        note.set_markup("<span size='small' color='#7a7a80'>This window can "
-                        "be reopened from the desktop icon or Settings → "
-                        "Live Session.</span>")
+        note.set_markup("<span size='small' color='#7a7a80'>%s</span>" %
+                        tr("wel_note",
+                           "This window can be reopened from the desktop icon "
+                           "or Settings → Live Session."))
         v.pack_start(note, False, False, 2)
 
     def go(self, cmd):

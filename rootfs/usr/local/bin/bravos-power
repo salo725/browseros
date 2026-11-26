@@ -1,0 +1,41 @@
+#!/bin/bash
+# bravos-power — power management helper for BraveOS.
+# Tries systemd directly (polkit allows local active users), then sudo
+# (NOPASSWD rule shipped in /etc/sudoers.d/bravos-power), then pkexec.
+# usage: bravos-power {suspend|reboot|poweroff|halt}
+set -u
+ACTION="${1:-}"
+case "$ACTION" in
+    suspend|reboot|poweroff|halt) ;;
+    *)
+        echo "usage: bravos-power {suspend|reboot|poweroff|halt}" >&2
+        exit 2
+        ;;
+esac
+
+# normalize to systemctl verbs
+case "$ACTION" in
+    suspend) VERB=suspend ;;
+    reboot) VERB=reboot ;;
+    poweroff) VERB=poweroff ;;
+    halt) VERB=halt ;;
+esac
+
+# 1) direct (polkit: active local sessions may power manage)
+if systemctl "$VERB" >/dev/null 2>&1; then
+    exit 0
+fi
+
+# 2) sudo with the shipped NOPASSWD rule
+if command -v sudo >/dev/null 2>&1; then
+    sudo -n systemctl "$VERB" >/dev/null 2>&1 && exit 0
+fi
+
+# 3) pkexec (asks for a password through the polkit agent)
+if command -v pkexec >/dev/null 2>&1; then
+    pkexec systemctl "$VERB"
+    exit $?
+fi
+
+echo "bravos-power: no way to $VERB (tried systemctl, sudo, pkexec)" >&2
+exit 1

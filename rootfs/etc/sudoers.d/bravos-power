@@ -1,0 +1,5 @@
+# BraveOS: passwordless power management for the desktop user, so the
+# power menu / dock power actions work instantly in the live session and
+# on installed systems (bravos-power falls back to this rule).
+%sudo ALL=(root) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /bin/systemctl suspend, /bin/systemctl halt
+%sudo ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot, /usr/bin/systemctl suspend, /usr/bin/systemctl halt

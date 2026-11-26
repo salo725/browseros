@@ -1,0 +1,961 @@
+#!/usr/bin/env python3
+"""bravos-dock — the BraveOS radial arc dock (signature desktop element).
+
+A semi-circular glassmorphic dome anchored at the bottom-center of the
+primary monitor:
+  - main row along the base: Files, Settings, [Brave hero], Terminal, App Grid
+  - inner arc row (smaller): Bluetooth, Night Light, Wi-Fi, Power, Lock
+  - orange/magenta rim glow, dark translucent purple-indigo glass,
+    hover scale-up + glow, running-app indicator dots, fully responsive
+    (scales with screen size), RTL-language aware tooltips via i18n.
+
+Implementation per the BraveOS design spec: a lightweight GTK3 + Cairo
+overlay window (undecorated, keep-above, dock-typed, click-through outside
+the arc via the X input shape).
+
+Usage: bravos-dock
+"""
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import cairo
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Pango", "1.0")
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+
+# ---- i18n ---------------------------------------------------------------------
+
+I18N_DIR = "/usr/share/bravos/i18n"
+RTL_LANGS = {"ar", "he", "fa", "ur"}
+TRANS = {}
+
+
+def detect_lang():
+    lang = os.environ.get("BRAVEOS_LANG") or os.environ.get("LANG") or "en"
+    lang = lang.split(".")[0].lower()
+    for cand in (lang, lang.replace("-", "_"), lang.split("_")[0],
+                 lang.split("-")[0]):
+        path = os.path.join(I18N_DIR, "dock", cand + ".conf")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    TRANS[k.strip()] = v.strip().strip('"').strip("'")
+            return cand
+    return "en"
+
+
+def tr(key, fallback):
+    return TRANS.get(key, fallback)
+
+
+# ---- palette ------------------------------------------------------------------
+
+GLASS_BG = (25 / 255, 18 / 255, 52 / 255, 0.78)      # rgba(25,18,52,0.78)
+RIM_A = (240 / 255, 78 / 255, 35 / 255)              # #f04e23
+RIM_B = (138 / 255, 43 / 255, 226 / 255)            # #8a2be2
+ACCENT = (240 / 255, 78 / 255, 35 / 255)            # #f04e23
+
+
+# ---- helpers -------------------------------------------------------------------
+
+
+def run(cmd):
+    try:
+        subprocess.Popen(["/bin/sh", "-c", cmd],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def wifi_enabled():
+    try:
+        out = subprocess.check_output(["nmcli", "radio", "wifi"],
+                                       timeout=2).decode().strip().lower()
+        return out == "enabled"
+    except Exception:
+        return False
+
+
+def bt_enabled():
+    try:
+        out = subprocess.check_output(["rfkill", "list", "bluetooth"],
+                                      timeout=2).decode().lower()
+        return "soft blocked: yes" not in out
+    except Exception:
+        return False
+
+
+def nightlight_on():
+    return os.path.exists(os.path.expanduser("~/.config/bravos/nightlight"))
+
+
+# ---- icon painters (pure Cairo vectors, no external assets) ---------------------
+
+
+def icon_folder(cr, cx, cy, s, col):
+    cr.set_source_rgb(0.32, 0.58, 0.99)
+    w, h = s * 1.15, s * 0.92
+    x0, y0 = cx - w / 2, cy - h / 2 + s * 0.10
+    r = s * 0.13
+    cr.new_sub_path()
+    cr.move_to(x0 + r, y0)
+    cr.arc(x0 + w - r, y0 + r, r, -math.pi / 2, 0)
+    cr.arc(x0 + w - r, y0 + h - r, r, 0, math.pi / 2)
+    cr.arc(x0 + r, y0 + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(0.22, 0.45, 0.85)
+    cr.new_sub_path()
+    cr.move_to(x0, y0 + r * 1.3)
+    cr.line_to(x0 + w * 0.42, y0 + r * 1.3)
+    cr.line_to(x0 + w * 0.52, y0 - s * 0.16)
+    cr.line_to(x0 + w * 0.92, y0 - s * 0.16)
+    cr.arc(x0 + w * 0.99, y0 - s * 0.08, r * 0.72, -math.pi / 2, 0)
+    cr.line_to(x0 + w, y0 + r * 1.3)
+    cr.close_path()
+    cr.fill()
+
+
+def icon_gear(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    r = s * 0.62
+    for i in range(8):
+        a = i * math.pi / 4
+        cr.new_sub_path()
+        cr.arc(cx + math.cos(a) * r, cy + math.sin(a) * r, s * 0.17,
+               0, 2 * math.pi)
+        cr.fill()
+    cr.new_sub_path()
+    cr.arc(cx, cy, r * 0.82, 0, 2 * math.pi)
+    cr.fill()
+    cr.set_source_rgb(0.10, 0.08, 0.22)
+    cr.new_sub_path()
+    cr.arc(cx, cy, r * 0.36, 0, 2 * math.pi)
+    cr.fill()
+
+
+def _lion_body(cr, cx, cy, s):
+    grad = cairo.LinearGradient(cx - s, cy - s, cx + s, cy + s)
+    grad.add_color_stop_rgb(0.0, 0.984, 0.329, 0.169)
+    grad.add_color_stop_rgb(0.5, 0.941, 0.306, 0.137)
+    grad.add_color_stop_rgb(1.0, 0.812, 0.208, 0.086)
+    cr.set_source(grad)
+    w, hh = s * 0.92, s * 1.0
+    x0, y0 = cx - w / 2, cy - hh / 2
+    cr.new_sub_path()
+    cr.move_to(cx, y0 + hh * 0.06)
+    cr.curve_to(x0 + w * 0.28, y0 - hh * 0.05, x0 + w * 0.72, y0 - hh * 0.05,
+                x0 + w, y0 + hh * 0.14)
+    cr.curve_to(x0 + w, y0 + hh * 0.62, cx + w * 0.18, y0 + hh * 0.9, cx,
+                y0 + hh)
+    cr.curve_to(cx - w * 0.18, y0 + hh * 0.9, x0, y0 + hh * 0.62, x0,
+                y0 + hh * 0.14)
+    cr.curve_to(x0, y0 + hh * 0.14, x0 + w * 0.06, y0 + hh * 0.02, cx,
+                y0 + hh * 0.06)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(1, 1, 1)
+    cr.set_line_width(s * 0.085)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    ey = cy - hh * 0.13
+    cr.new_sub_path()
+    cr.move_to(cx - w * 0.30, ey - s * 0.02)
+    cr.line_to(cx - w * 0.11, ey + s * 0.045)
+    cr.stroke()
+    cr.new_sub_path()
+    cr.move_to(cx + w * 0.30, ey - s * 0.02)
+    cr.line_to(cx + w * 0.11, ey + s * 0.045)
+    cr.stroke()
+    cr.set_line_width(s * 0.07)
+    my = cy + hh * 0.16
+    cr.new_sub_path()
+    cr.move_to(cx - w * 0.20, my)
+    cr.curve_to(cx - w * 0.10, my + s * 0.08, cx - w * 0.03, my + s * 0.01,
+                cx, my + s * 0.05)
+    cr.curve_to(cx + w * 0.03, my + s * 0.01, cx + w * 0.10, my + s * 0.08,
+                cx + w * 0.20, my)
+    cr.stroke()
+
+
+def icon_lion(cr, cx, cy, s, col):
+    _lion_body(cr, cx, cy, s)
+
+
+def icon_terminal(cr, cx, cy, s, col):
+    cr.set_source_rgb(0.09, 0.07, 0.18)
+    w = h = s * 1.12
+    x0, y0 = cx - w / 2, cy - h / 2
+    r = s * 0.22
+    cr.new_sub_path()
+    cr.move_to(x0 + r, y0)
+    cr.arc(x0 + w - r, y0 + r, r, -math.pi / 2, 0)
+    cr.arc(x0 + w - r, y0 + h - r, r, 0, math.pi / 2)
+    cr.arc(x0 + r, y0 + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(1, 1, 1)
+    cr.set_line_width(s * 0.13)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.new_sub_path()
+    cr.move_to(cx - s * 0.30, cy - s * 0.24)
+    cr.line_to(cx - s * 0.05, cy)
+    cr.line_to(cx - s * 0.30, cy + s * 0.24)
+    cr.stroke()
+    cr.set_line_width(s * 0.12)
+    cr.new_sub_path()
+    cr.move_to(cx + s * 0.06, cy + s * 0.24)
+    cr.line_to(cx + s * 0.36, cy + s * 0.24)
+    cr.stroke()
+
+
+def icon_grid(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    d = s * 0.52
+    for iy in (-1, 0, 1):
+        for ix in (-1, 0, 1):
+            cr.new_sub_path()
+            cr.arc(cx + ix * d, cy + iy * d, s * 0.13, 0, 2 * math.pi)
+            cr.fill()
+
+
+def icon_bluetooth(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.set_line_width(s * 0.14)
+    hh = s * 0.55
+    cr.new_sub_path()
+    cr.move_to(cx, cy - hh)
+    cr.line_to(cx, cy + hh)
+    cr.stroke()
+    cr.new_sub_path()
+    cr.move_to(cx - hh * 0.62, cy - hh * 0.28)
+    cr.line_to(cx, cy + hh * 0.34)
+    cr.line_to(cx + hh * 0.62, cy - hh * 0.28)
+    cr.stroke()
+    cr.new_sub_path()
+    cr.move_to(cx - hh * 0.62, cy + hh * 0.28)
+    cr.line_to(cx, cy - hh * 0.34)
+    cr.line_to(cx + hh * 0.62, cy + hh * 0.28)
+    cr.stroke()
+
+
+def icon_moon(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    cr.new_sub_path()
+    cr.arc(cx - s * 0.05, cy, s * 0.52, math.pi * 0.30, math.pi * 1.70)
+    cr.curve_to(cx - s * 0.15, cy + s * 0.48, cx - s * 0.42, cy + s * 0.18,
+                cx - s * 0.46, cy - s * 0.24)
+    cr.close_path()
+    cr.fill()
+    cr.new_sub_path()
+    cr.arc(cx + s * 0.34, cy - s * 0.34, s * 0.075, 0, 2 * math.pi)
+    cr.fill()
+
+
+def icon_wifi(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_width(s * 0.13)
+    cr.new_sub_path()
+    cr.arc(cx, cy + s * 0.42, s * 0.11, 0, 2 * math.pi)
+    cr.fill()
+    for rr in (s * 0.32, s * 0.55, s * 0.78):
+        cr.new_sub_path()
+        cr.arc(cx, cy + s * 0.42, rr, -math.pi * 0.78, -math.pi * 0.22)
+        cr.stroke()
+
+
+def icon_power(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_width(s * 0.14)
+    r = s * 0.46
+    cr.new_sub_path()
+    cr.arc(cx, cy, r, -math.pi * 0.32, math.pi * 1.32)
+    cr.stroke()
+    cr.new_sub_path()
+    cr.move_to(cx, cy - r - s * 0.22)
+    cr.line_to(cx, cy + s * 0.12)
+    cr.stroke()
+
+
+def icon_lock(cr, cx, cy, s, col):
+    cr.set_source_rgb(*col)
+    cr.set_line_width(s * 0.13)
+    cr.new_sub_path()
+    cr.arc(cx, cy - s * 0.18, s * 0.28, math.pi, 2 * math.pi)
+    cr.stroke()
+    w, h = s * 0.66, s * 0.5
+    x0, y0 = cx - w / 2, cy - s * 0.14
+    r = s * 0.08
+    cr.new_sub_path()
+    cr.move_to(x0 + r, y0)
+    cr.arc(x0 + w - r, y0 + r, r, -math.pi / 2, 0)
+    cr.arc(x0 + w - r, y0 + h - r, r, 0, math.pi / 2)
+    cr.arc(x0 + r, y0 + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+    cr.fill()
+
+
+ICONS = {
+    "folder": icon_folder,
+    "gear": icon_gear,
+    "lion": icon_lion,
+    "terminal": icon_terminal,
+    "grid": icon_grid,
+    "bluetooth": icon_bluetooth,
+    "moon": icon_moon,
+    "wifi": icon_wifi,
+    "power": icon_power,
+    "lock": icon_lock,
+}
+
+
+# ---- shared GTK styling ------------------------------------------------------------
+
+
+def install_style():
+    css = b"""
+    #bravosdock { background-color: transparent; }
+    #bravosmenu { background-color: rgba(20, 16, 42, 0.96);
+                  border-radius: 14px; border: 1px solid
+                  rgba(255,255,255,0.10); }
+    #bravosmenu .menu-item {
+        background: rgba(40,30,80,0.0); color: #ffffff;
+        border-radius: 9px; border: none;
+        padding: 8px 18px; font-weight: 600; transition: all 120ms ease;
+    }
+    #bravosmenu .menu-item:hover { background: #6c3ce9; }
+    #bravosmenu .item-sub { color: #b9b3d6; font-size: 12px; }
+    #bravosmenu .launcher-btn { background: transparent; border: none; }
+    """
+    prov = Gtk.CssProvider()
+    prov.load_from_data(css)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), prov,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+# ---- dock buttons ----------------------------------------------------------------
+
+
+class DockButton:
+    def __init__(self, key, label, cmd, icon, radius_scale=1.0,
+                 toggled=None, action=None):
+        self.key = key
+        self.label = label
+        self.cmd = cmd
+        self.icon = icon
+        self.radius_scale = radius_scale
+        self.toggled = toggled      # callable -> bool
+        self.action = action        # callable(dock)
+        self.cx = 0.0
+        self.cy = 0.0
+        self.r = 0.0
+        self.hover = 0.0
+        self.press = False
+        self.running_dot = False
+
+    def hit(self, px, py):
+        return math.hypot(px - self.cx, py - self.cy) <= self.r + 6
+
+    def activate(self, dock):
+        if self.action:
+            self.action(dock)
+        elif self.cmd:
+            run(self.cmd)
+
+
+# ---- power menu popup --------------------------------------------------------------
+
+
+class PowerMenu(Gtk.Window):
+    def __init__(self, dock, x, y):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_name("bravosmenu")
+        self.set_events(self.get_events() |
+                        Gdk.EventMask.BUTTON_PRESS_MASK |
+                        Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect("button-press-event", self.on_button)
+        self.connect("key-press-event", self.on_key)
+
+        items = [
+            (tr("power_lock", "Lock Screen"), "bravos-lock"),
+            (tr("power_logout", "Log Out"), "bravos-wmctl logout"),
+            (None, None),
+            (tr("power_suspend", "Suspend"), "bravos-power suspend"),
+            (tr("power_restart", "Restart"), "bravos-power reboot"),
+            (tr("power_shutdown", "Shut Down"), "bravos-power poweroff"),
+        ]
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_border_width(8)
+        for label, cmd in items:
+            if label is None:
+                box.pack_start(Gtk.Separator(), False, False, 0)
+                continue
+            b = Gtk.Button(label=label)
+            b.get_style_context().add_class("menu-item")
+            b.cmd = cmd
+            b.connect("clicked", self.on_item)
+            box.pack_start(b, False, False, 0)
+        self.add(box)
+        self.show_all()
+        w = self.get_preferred_size()[1].width
+        h = self.get_preferred_size()[1].height
+        sw = Gdk.Screen.width()
+        sh = Gdk.Screen.height()
+        self.move(max(8, min(x - w // 2, sw - w - 8)), max(8, y - h - 24))
+        self.grab_add()
+
+    def on_item(self, btn):
+        self.destroy()
+        run(btn.cmd)
+
+    def on_button(self, w, ev):
+        alloc = self.get_allocation()
+        if not (0 <= ev.x <= alloc.width and 0 <= ev.y <= alloc.height):
+            self.destroy()
+        return False
+
+    def on_key(self, w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.destroy()
+        return False
+
+
+# ---- quick-launcher popup (App Grid) ------------------------------------------------
+
+
+class Launcher(Gtk.Window):
+    def __init__(self, dock):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_name("bravosmenu")
+        self.set_events(self.get_events() |
+                        Gdk.EventMask.BUTTON_PRESS_MASK |
+                        Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect("button-press-event", self.on_button)
+        self.connect("key-press-event", self.on_key)
+
+        items = [
+            ("lion", tr("app_brave", "Brave Browser"), "brave"),
+            ("grid", tr("app_install", "Install BraveOS"), "bravos-installer"),
+            ("lion", tr("app_welcome", "Welcome"), "bravos-welcome"),
+            (None, tr("app_tools", "System tools"), None),
+            ("gear", tr("app_settings", "Settings"), "bravos-settings"),
+            ("terminal", tr("app_terminal", "Terminal"), "lxterminal"),
+            ("folder", tr("app_files", "Files"), "pcmanfm"),
+            ("grid", tr("app_shortcuts", "Keyboard Shortcuts"),
+             "bravos-settings --page shortcuts"),
+        ]
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        outer.set_border_width(16)
+        flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12,
+                       homogeneous=True)
+        for icon_key, label, cmd in items:
+            if icon_key is None:
+                flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                               spacing=12, homogeneous=True)
+                outer.pack_start(Gtk.Separator(), False, False, 0)
+                outer.pack_start(flow, False, False, 0)
+                continue
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            da = Gtk.DrawingArea()
+            da.set_size_request(52, 52)
+            da.connect("draw", self.draw_icon, icon_key)
+            box.pack_start(da, False, False, 0)
+            lbl = Gtk.Label(label=label)
+            lbl.get_style_context().add_class("item-sub")
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(16)
+            box.pack_start(lbl, False, False, 0)
+            btn = Gtk.Button()
+            btn.cmd = cmd
+            btn.connect("clicked", self.on_item)
+            btn.add(box)
+            btn.get_style_context().add_class("menu-item")
+            flow.pack_start(btn, False, False, 0)
+
+        self.add(outer)
+        self.show_all()
+        w = self.get_preferred_size()[1].width
+        sw = Gdk.Screen.width()
+        self.move(max(8, sw - w - 48), 96)
+        self.grab_add()
+
+    def draw_icon(self, da, cr, icon_key):
+        w = da.get_allocated_width()
+        h = da.get_allocated_height()
+        cx, cy = w / 2, h / 2
+        cr.set_source_rgba(0.16, 0.11, 0.35, 1.0)
+        cr.new_sub_path()
+        cr.arc(cx, cy, min(w, h) / 2 - 4, 0, 2 * math.pi)
+        cr.fill()
+        ICONS.get(icon_key, icon_grid)(cr, cx, cy, min(w, h) * 0.26,
+                                       (1, 1, 1))
+        return True
+
+    def on_item(self, btn):
+        self.destroy()
+        run(btn.cmd)
+
+    def on_button(self, w, ev):
+        alloc = self.get_allocation()
+        if not (0 <= ev.x <= alloc.width and 0 <= ev.y <= alloc.height):
+            self.destroy()
+        return False
+
+    def on_key(self, w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.destroy()
+        return False
+
+
+# ---- the dock -----------------------------------------------------------------------
+
+
+class Dock(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.lang = detect_lang()
+        self.set_decorated(False)
+        self.set_app_paintable(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_type_hint(Gdk.WindowTypeHint.DOCK)
+        self.set_keep_above(True)
+        self.set_title("bravos-dock")
+        self.set_name("bravosdock")
+        self.set_events(self.get_events() |
+                        Gdk.EventMask.BUTTON_PRESS_MASK |
+                        Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK |
+                        Gdk.EventMask.LEAVE_NOTIFY_MASK |
+                        Gdk.EventMask.SCROLL_MASK |
+                        Gdk.EventMask.EXPOSURE_MASK)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None:
+            self.set_visual(visual)
+
+        self.connect("draw", self.on_draw)
+        self.connect("button-press-event", self.on_button_press)
+        self.connect("button-release-event", self.on_button_release)
+        self.connect("motion-notify-event", self.on_motion)
+        self.connect("leave-notify-event", self.on_leave)
+        self.connect("scroll-event", self.on_scroll)
+        self.connect("configure-event", self.on_configure)
+        self.connect("destroy", Gtk.main_quit)
+
+        self.geom_w = 0
+        self.geom_h = 0
+        self.hover_btn = None
+        self.press_btn = None
+        self.start_time = time.time()
+        self.buttons = []
+        self.build_buttons()
+        self.style_provider()
+        self.layout()
+
+        GLib.timeout_add(16, self.tick)
+        GLib.timeout_add(2000, self.refresh_running)
+        self.refresh_running()
+
+    # ---- buttons --------------------------------------------------------------
+
+    def build_buttons(self):
+        B = DockButton
+        self.buttons = [
+            # main row (left -> right along the base)
+            B("files", tr("tip_files", "Files"), "pcmanfm", "folder"),
+            B("settings", tr("tip_settings", "Settings"), "bravos-settings",
+              "gear"),
+            B("brave", tr("tip_brave", "Brave Browser"), "brave", "lion", 1.26),
+            B("terminal", tr("tip_terminal", "Terminal"), "lxterminal",
+              "terminal"),
+            B("appgrid", tr("tip_appgrid", "App Grid"), None, "grid",
+              action=self.open_launcher),
+            # inner arc row, left -> right on the dome
+            B("bluetooth", tr("tip_bluetooth", "Bluetooth"), None, "bluetooth",
+              0.62, toggled=bt_enabled, action=lambda d: run(
+                  "rfkill %s bluetooth" %
+                  ("block" if bt_enabled() else "unblock"))),
+            B("nightlight", tr("tip_nightlight", "Night Light"), None, "moon",
+              0.62, toggled=nightlight_on,
+              action=lambda d: run("bravos-nightlight toggle")),
+            B("wifi", tr("tip_wifi", "Wi-Fi"), None, "wifi", 0.62,
+              toggled=wifi_enabled,
+              action=lambda d: run("nmcli radio wifi %s" %
+                                   ("off" if wifi_enabled() else "on"))),
+            B("power", tr("tip_power", "Power"), None, "power", 0.62,
+              action=self.open_power),
+            B("lock", tr("tip_lock", "Lock Screen"), "bravos-lock", "lock",
+              0.62),
+        ]
+
+    def by_key(self, key):
+        for b in self.buttons:
+            if b.key == key:
+                return b
+        raise KeyError(key)
+
+    def open_power(self, dock):
+        win = self.get_window()
+        if win is None:
+            return
+        p = win.get_pointer()  # (x, y, mask)
+        PowerMenu(self, p[0], p[1])
+
+    def open_launcher(self, dock):
+        Launcher(self)
+
+    def is_running(self, key):
+        pg = {"files": "pcmanfm", "settings": "bravos-settings",
+              "brave": "brave", "terminal": "lxterminal"}.get(key)
+        if not pg:
+            return False
+        try:
+            out = subprocess.check_output(
+                ["pgrep", "-x", "-u", str(os.getuid()), pg], timeout=2)
+            return bool(out.strip())
+        except Exception:
+            return False
+
+    def refresh_running(self, *_):
+        for b in self.buttons:
+            b.running_dot = self.is_running(b.key)
+        self.queue_draw()
+        return True
+
+    # ---- responsive geometry ----------------------------------------------------
+
+    def layout(self):
+        """Dome radius scales with the smallest screen dimension, clamped so
+        the dock fits everything from 800x600 to 4K."""
+        screen = self.get_screen()
+        sw = screen.width()
+        sh = screen.height()
+        R = min(sw, sh) * 0.155
+        R = max(120.0, min(R, 300.0))
+        self.R = R
+
+        glow = 26
+        self.glow = glow
+        self.geom_w = int(R * 2 + glow * 2)
+        self.geom_h = int(R + glow * 2)
+        self.cx = self.geom_w / 2.0
+        self.base_y = self.geom_h - glow * 0.5
+
+        gap = max(8, round(R * 0.075))
+        self.gap = gap
+
+        # main row: 5 circular buttons along the dome base
+        main_r = R * 0.145
+        spread = R * 0.56
+        main_defs = [
+            ("files", -spread, 0.09),
+            ("settings", -spread * 0.5, 0.024),
+            ("brave", 0.0, 0.0),
+            ("terminal", spread * 0.5, 0.024),
+            ("appgrid", spread, 0.09),
+        ]
+        for key, dx, rise in main_defs:
+            b = self.by_key(key)
+            b.cx = self.cx + dx
+            b.cy = self.base_y - main_r - R * rise - gap * 0.4
+            b.r = main_r * b.radius_scale
+
+        # inner arc row: 5 smaller glass buttons hugging the dome curve, fully
+        # inside the rim (theta from +x axis; 90 = top center, above the hero)
+        small_r = max(11.0, R * 0.09)
+        arc_r = R - small_r - 10
+        thetas = {"bluetooth": 157, "nightlight": 122, "wifi": 90,
+                  "power": 58, "lock": 23}
+        for key, tdeg in thetas.items():
+            b = self.by_key(key)
+            t = math.radians(tdeg)
+            b.cx = self.cx + math.cos(t) * arc_r
+            b.cy = self.base_y - math.sin(t) * arc_r
+            b.r = small_r
+
+        mon = screen.get_monitor_geometry(screen.get_primary_monitor())
+        x = mon.x + (mon.width - self.geom_w) // 2
+        y = mon.y + mon.height - self.geom_h - 12
+        self.resize(self.geom_w, self.geom_h)
+        self.move(x, y)
+
+    def style_provider(self):
+        install_style()
+
+    # ---- click-through input shape -----------------------------------------------
+
+    def on_configure(self, *_):
+        self.apply_input_shape()
+        return False
+
+    def input_region(self):
+        """Dome + button circles as a union of rects (fast, no pixels)."""
+        region = cairo.Region()
+        R = self.R + 12
+        step = 4
+        y = 0
+        while y < R:
+            half = math.sqrt(max(0.0, R * R - y * y))
+            region.union(cairo.RectangleInt(
+                int(self.cx - half), int(self.base_y - y - step),
+                int(2 * half) + 1, step + 1))
+            y += step
+        region.union(cairo.RectangleInt(int(self.cx - R), int(self.base_y - 2),
+                                        int(2 * R) + 1, 3))
+        for b in self.buttons:
+            r = b.r + 7
+            region.union(cairo.RectangleInt(int(b.cx - r), int(b.cy - r),
+                                           int(2 * r) + 1, int(2 * r) + 1))
+        return region
+
+    def apply_input_shape(self):
+        win = self.get_window()
+        if win is None:
+            return
+        region = self.input_region()
+        win.shape_combine_region(region, 0, 0)
+        win.input_shape_combine_region(region, 0, 0)
+
+    # ---- input --------------------------------------------------------------------
+
+    def on_motion(self, w, ev):
+        hit = None
+        for b in self.buttons:
+            if b.hit(ev.x, ev.y):
+                hit = b
+                break
+        if hit is not self.hover_btn:
+            self.hover_btn = hit
+        return False
+
+    def on_leave(self, w, ev):
+        self.hover_btn = None
+        return False
+
+    def on_button_press(self, w, ev):
+        for b in self.buttons:
+            if b.hit(ev.x, ev.y):
+                b.press = True
+                self.queue_draw()
+                return True
+        return False
+
+    def on_button_release(self, w, ev):
+        hit = None
+        for b in self.buttons:
+            if b.hit(ev.x, ev.y):
+                hit = b
+                break
+        pressed = [b for b in self.buttons if b.press]
+        for b in pressed:
+            b.press = False
+        if hit is not None and hit in pressed:
+            hit.activate(self)
+            GLib.timeout_add(400, self.refresh_running)
+        self.queue_draw()
+        return True
+
+    def on_scroll(self, w, ev):
+        if ev.direction == Gdk.ScrollDirection.UP:
+            run("bravos-wmctl workspace prev")
+        elif ev.direction == Gdk.ScrollDirection.DOWN:
+            run("bravos-wmctl workspace next")
+        return True
+
+    # ---- animation ------------------------------------------------------------------
+
+    def tick(self):
+        any_changing = False
+        for b in self.buttons:
+            target = 1.0 if (b is self.hover_btn or b.press) else 0.0
+            if b.hover != target:
+                step = 0.20
+                b.hover = (min(target, b.hover + step) if b.hover < target
+                          else max(target, b.hover - step))
+                any_changing = True
+        if any_changing:
+            self.queue_draw()
+        return True
+
+    # ---- drawing ----------------------------------------------------------------------
+
+    def on_draw(self, w, cr):
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+
+        cx, base_y, R = self.cx, self.base_y, self.R
+
+        # soft drop shadow under the dome
+        for i in (4, 2):
+            cr.set_source_rgba(0.03, 0.01, 0.09, 0.14 / (5 - i))
+            cr.new_sub_path()
+            cr.arc(cx, base_y + i * 3.5, R + i * 4, math.pi, 2 * math.pi)
+            cr.close_path()
+            cr.fill()
+
+        # dome glass body
+        cr.new_sub_path()
+        cr.arc(cx, base_y, R, math.pi, 2 * math.pi)
+        cr.close_path()
+        cr.set_source_rgba(*GLASS_BG)
+        cr.fill()
+
+        # inner sheen (clipped to the dome)
+        cr.save()
+        cr.new_sub_path()
+        cr.arc(cx, base_y, R - 1, math.pi, 2 * math.pi)
+        cr.close_path()
+        cr.clip()
+        grad = cairo.LinearGradient(0, base_y - R, 0, base_y)
+        grad.add_color_stop_rgba(0.0, 1, 1, 1, 0.15)
+        grad.add_color_stop_rgba(0.45, 1, 1, 1, 0.04)
+        grad.add_color_stop_rgba(1.0, 0.35, 0.18, 0.55, 0.10)
+        cr.set_source(grad)
+        cr.paint()
+        cr.restore()
+
+        # glowing rim: orange -> magenta -> orange
+        rim_grad = cairo.LinearGradient(cx - R, 0, cx + R, 0)
+        rim_grad.add_color_stop_rgba(0.0, *RIM_A, 0.95)
+        rim_grad.add_color_stop_rgba(0.5, *RIM_B, 0.95)
+        rim_grad.add_color_stop_rgba(1.0, *RIM_A, 0.95)
+        for g, a in ((5, 0.14), (3, 0.28)):
+            cr.set_source_rgba(RIM_A[0], RIM_A[1], RIM_A[2], a)
+            cr.set_line_width(1.4 + g)
+            cr.new_sub_path()
+            cr.arc(cx, base_y, R, math.pi, 2 * math.pi)
+            cr.stroke()
+        cr.set_source(rim_grad)
+        cr.set_line_width(2.4)
+        cr.new_sub_path()
+        cr.arc(cx, base_y, R, math.pi, 2 * math.pi)
+        cr.stroke()
+
+        # buttons
+        for b in self.buttons:
+            self.draw_button(cr, b)
+
+        # hero glow dot under the Brave button
+        hero = self.by_key("brave")
+        dot_y = hero.cy + hero.r + 10
+        cr.set_source_rgba(ACCENT[0], ACCENT[1], ACCENT[2], 0.30)
+        cr.new_sub_path()
+        cr.arc(hero.cx, dot_y, 6.0, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgba(ACCENT[0], ACCENT[1], ACCENT[2], 0.95)
+        cr.new_sub_path()
+        cr.arc(hero.cx, dot_y, 2.6, 0, 2 * math.pi)
+        cr.fill()
+        return True
+
+    def draw_button(self, cr, b):
+        hov = b.hover
+        scale = 1.0 + 0.13 * hov
+        if b.press:
+            scale = 0.93
+        r = b.r * scale
+        cx, cy = b.cx, b.cy
+
+        # hover glow ring
+        if hov > 0:
+            for g, a in ((6, 0.20 * hov), (3.5, 0.45 * hov)):
+                cr.set_source_rgba(ACCENT[0], ACCENT[1], ACCENT[2], a)
+                cr.set_line_width(2 + g)
+                cr.new_sub_path()
+                cr.arc(cx, cy, r + 1, 0, 2 * math.pi)
+                cr.stroke()
+
+        # circular glass
+        glass = cairo.RadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.1,
+                                     cx, cy, r)
+        glass.add_color_stop_rgba(0.0, 1, 1, 1, 0.22 + 0.10 * hov)
+        glass.add_color_stop_rgba(1.0, 1, 1, 1, 0.06)
+        cr.new_sub_path()
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.set_source(glass)
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, 0.22 + 0.28 * hov)
+        cr.set_line_width(1.2)
+        cr.new_sub_path()
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.stroke()
+
+        # icon (dimmed if a toggle is off)
+        on = True
+        if b.toggled:
+            try:
+                on = bool(b.toggled())
+            except Exception:
+                on = False
+        painter = ICONS.get(b.icon)
+        if painter:
+            col = (1, 1, 1) if on else (0.68, 0.65, 0.82)
+            painter(cr, cx, cy, r * 0.55, col)
+
+        # hero button: orange ring + white lion badge
+        if b.key == "brave":
+            cr.set_source_rgb(*RIM_A)
+            cr.set_line_width(r * 0.10)
+            cr.new_sub_path()
+            cr.arc(cx, cy, r * 0.90, 0, 2 * math.pi)
+            cr.stroke()
+            cr.new_sub_path()
+            cr.arc(cx, cy, r * 0.78, 0, 2 * math.pi)
+            cr.set_source_rgba(1, 1, 1, 0.96)
+            cr.fill()
+            _lion_body(cr, cx, cy, r * 0.40)
+
+        # running indicator dot
+        if b.running_dot and b.key != "brave":
+            dr = max(2.5, b.r * 0.13)
+            dot_y = cy + r + dr + 3
+            cr.set_source_rgba(ACCENT[0], ACCENT[1], ACCENT[2], 0.95)
+            cr.new_sub_path()
+            cr.arc(cx, dot_y, dr, 0, 2 * math.pi)
+            cr.fill()
+
+
+def main():
+    signal.signal(signal.SIGUSR1, lambda *a: Gtk.main_quit())
+    if "--launcher" in sys.argv:
+        # Alt+F2 quick-launcher popup (no dock window)
+        install_style()
+        Launcher(None)
+        Gtk.main()
+        return
+    if "--debug" in sys.argv:
+        os.environ.setdefault("GDK_DEBUG", "misc")
+    dock = Dock()
+    dock.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

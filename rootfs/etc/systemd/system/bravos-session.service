@@ -1,5 +1,5 @@
 [Unit]
-Description=BraveOS graphical session (X + Openbox)
+Description=BraveOS graphical session (X + BraveWM)
 Conflicts=getty@tty1.service
 After=getty@tty1.service systemd-user-sessions.service network.target
 Wants=network.target

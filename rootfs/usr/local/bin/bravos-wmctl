@@ -1,0 +1,44 @@
+#!/bin/bash
+# bravos-wmctl — command-line control of BraveWM (EWMH messages).
+# usage:
+#   bravos-wmctl workspace {next|prev|N}
+#   bravos-wmctl show-desktop
+#   bravos-wmctl logout
+set -u
+ACTION="${1:-}"
+X="${DISPLAY:-:0}"
+
+xid() { xprop -root -notype -f _NET_SUPPORTING_WM_CHECK 32x '$0' _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -o '0x[0-9a-f]*'; }
+
+case "$ACTION" in
+    workspace)
+        SUB="${2:-next}"
+        case "$SUB" in
+            next|prev)
+                CUR=$(xprop -root -notype _NET_CURRENT_DESKTOP 2>/dev/null | grep -o '[0-9]*$')
+                N=$(xprop -root -notype _NET_NUMBER_OF_DESKTOPS 2>/dev/null | grep -o '[0-9]*$')
+                CUR="${CUR:-0}"; N="${N:-2}"
+                if [ "$SUB" = "next" ]; then
+                    T=$(( (CUR + 1) % N ))
+                else
+                    T=$(( (CUR + N - 1) % N ))
+                fi
+                ;;
+            *)
+                T=$((SUB - 1))
+                ;;
+        esac
+        xprop -root -f _NET_CURRENT_DESKTOP 32c -set _NET_CURRENT_DESKTOP "$T" >/dev/null 2>&1
+        ;;
+    show-desktop)
+        xprop -root -f _NET_SHOWING_DESKTOP 32c -set _NET_SHOWING_DESKTOP 1 >/dev/null 2>&1
+        ;;
+    logout)
+        # clean end of the user session (WM catches SIGUSR2 too)
+        pkill -USR2 -x bravos-wm 2>/dev/null || pkill -x bravos-wm 2>/dev/null
+        ;;
+    *)
+        echo "usage: bravos-wmctl {workspace {next|prev|N}|show-desktop|logout}" >&2
+        exit 2
+        ;;
+esac

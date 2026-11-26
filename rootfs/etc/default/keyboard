@@ -1,0 +1,9 @@
+# BraveOS keyboard configuration
+# Layouts: English + Arabic (spec v1.0.2); Ctrl+Shift or Ctrl+Alt+Space
+# cycles layouts system-wide (also per-session via bravos-kb-switch).
+XKBMODEL="pc105"
+XKBLAYOUT="us,ar"
+XKBVARIANT=","
+XKBOPTIONS="grp:ctrls_toggle,grp:ctrl_alt_space"
+
+BACKSPACE="guess"

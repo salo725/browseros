@@ -38,15 +38,22 @@ xserver-xorg-video-ati
 xserver-xorg-video-intel
 xserver-xorg-video-fbdev
 
-# --- session stack (lightweight, no DE) ---
-openbox
+# --- session stack: our own WM (bravos-wm, compiled by build.sh) + compositor
 picom
-tint2
+libx11-6
+libxext6
+libxinerama1
+libcairo2
+libpango-1.0-0
+libpangocairo-1.0-0
+libxkbcommon0
+x11-utils
+x11-xserver-utils
 
-# --- applications: browser, file manager, debug terminal ---
+# --- applications: browser, file manager, terminal ---
 brave-browser
 pcmanfm
-xterm
+lxterminal
 
 # --- network ---
 network-manager
@@ -60,14 +67,19 @@ alsa-utils
 # --- custom UI runtime ---
 python3-gi
 gir1.2-gtk-3.0
+python3-cairo
+lxpolkit
 
-# --- fonts ---
+# --- fonts (all-language text rendering) ---
+fonts-inter
 fonts-dejavu-core
 fonts-liberation
 fonts-noto-core
+fonts-noto-cjk
 
 # --- live system ---
 live-boot
+locales
 
 # --- installer dependencies ---
 parted
@@ -90,3 +102,6 @@ xdg-user-dirs
 xdg-utils
 shared-mime-info
 desktop-file-utils
+papirus-icon-theme
+scrot
+util-linux
