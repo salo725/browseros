@@ -187,12 +187,12 @@ impl Fonts {
             }
         }
         let mut loaded = Vec::with_capacity(slots.len());
-        for slot in slots.iter() {
-            if slot.big {
-                loaded.push(None); // deferred
-            } else {
-                loaded.push(Self::load_slot(slot));
-            }
+        for _slot in slots.iter() {
+            // ALL faces load lazily on first use: eagerly loading (and
+            // leaking) every font file here cost the shell ~300 MB RSS on
+            // a fonts-noto-core system. face_for_char() loads a face the
+            // first time a character actually needs it.
+            loaded.push(None);
         }
         *self.faces.borrow_mut() = loaded;
         *self.slots.borrow_mut() = Some(slots);
