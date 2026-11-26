@@ -197,6 +197,8 @@ echo "UITEST-MEM zram0 mm_stat:"
 cat /sys/block/zram0/mm_stat 2>/dev/null | sed 's/^/UITEST-MEM /'
 echo "UITEST-MEM tmpfs/overlay:"
 df -h -t tmpfs -t overlay 2>/dev/null | sed 's/^/UITEST-MEM /'
+echo "UITEST-MEM top processes by RSS:"
+ps aux --sort=-rss | head -14 | sed 's/^/UITEST-MEM /'
 echo "UITEST-MEM overlay dirs:"
 du -sh /run/live/overlay* /overlayfs /var/cache/fontconfig 2>/dev/null | sed 's/^/UITEST-MEM /'
 
