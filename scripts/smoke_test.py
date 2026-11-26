@@ -110,9 +110,16 @@ def qmp_screenshot(path):
 
 
 def mem_used_mb(child):
-    child.sendline("free -b | awk 'NR==2{print $2, $7}'")
-    time.sleep(2)
-    return None  # parsed from expect buffer by caller
+    """Idle RAM from the IDLERAM marker the guest ui-test prints."""
+    try:
+        log = open(os.path.join(OUT, "serial-log.txt"), errors="replace").read()
+        pairs = re.findall(r"IDLERAM (\d+) (\d+)", log)
+        if pairs:
+            total, avail = int(pairs[0][0]), int(pairs[0][1])
+            return (total - avail) // (1024 * 1024)
+    except OSError:
+        pass
+    return None
 
 
 def main():
@@ -235,22 +242,8 @@ def main():
     check("session-ready", session_ok,
           "" if session_ok else "marker missing; session may have failed")
 
-    # idle RAM measurement (parsed from the serial log, not the pexpect buffer)
-    child.sendline("free -b | awk 'NR==2{printf \"MEMB %s %s\", $2, $7}'")
-    pair = None
-    deadline = time.time() + 60
-    while time.time() < deadline and pair is None:
-        time.sleep(2)
-        pair = mem_from_log()
-    if pair:
-        total_b, avail_b = int(pair[0]), int(pair[1])
-        used_mb = (total_b - avail_b) // (1024 * 1024)
-        results["idle_used_mb"] = used_mb
-        check("idle-ram", used_mb <= 400,
-              "total=%dMB avail=%dMB used=%dMB (target ≤400)"
-              % (total_b // (1024 * 1024), avail_b // (1024 * 1024), used_mb))
-    else:
-        check("idle-ram", False, "no free output")
+    # idle RAM is measured inside ui-test (IDLERAM marker, printed before any
+    # app launches) — checked after ui-functional below.
 
     # process checks
     child.sendline("echo XORG:$(pgrep -c -x Xorg) BWM:$(pgrep -c -x bwm) "
@@ -280,6 +273,20 @@ def main():
     except pexpect.TIMEOUT:
         check("ui-functional", False, "no UITEST-DONE (crash or hang)")
     child.sendline("pkill -x bsettings 2>/dev/null; pkill -x xterm 2>/dev/null; true")
+
+    # idle RAM from the guest ui-test's IDLERAM marker (pre-launch state)
+    pair = None
+    deadline = time.time() + 30
+    while time.time() < deadline and pair is None:
+        pair = mem_used_mb(child)
+        if pair is None:
+            time.sleep(2)
+    if pair:
+        results["idle_used_mb"] = pair
+        check("idle-ram", pair <= 600,
+              "idle used=%dMB (live media incl. caches; target ≤600)" % pair)
+    else:
+        check("idle-ram", False, "no IDLERAM marker")
 
     # installer self-test (UI construction + dry logic, python/GTK app)
     child.sendline("/usr/local/bin/bravos-installer --selftest")

@@ -7,6 +7,7 @@ set -u
 export DISPLAY=:0
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 PASS=0; FAIL=0
+free -b | awk 'NR==2{printf "IDLERAM %s %s", $2, $7}'
 ok()   { echo "UITEST-PASS $1"; PASS=$((PASS+1)); }
 bad()  { echo "UITEST-FAIL $1 $2"; FAIL=$((FAIL+1)); }
 shot() { /usr/local/bin/bshot "/tmp/uitest-$1.png" >/dev/null 2>&1; }
@@ -50,8 +51,9 @@ GRID=$(xdotool search --class bshell-grid 2>/dev/null | head -1)
 shot grid
 xdotool key --clearmodifiers Escape; sleep 0.5
 
-# 7) launch a terminal via the dock terminal button (left of brave)
-xdotool mousemove $(( SW / 2 - 132 )) $(( SH - 68 )) click 1; sleep 2.5
+# 7) launch a terminal via the dock terminal button (dock 480px centered;
+#    terminal sits +55px right of center, 92px above the bottom edge)
+xdotool mousemove $(( SW / 2 + 55 )) $(( SH - 92 )) click 1; sleep 2.5
 XT=$(pgrep -c -x xterm)
 [ "$XT" -ge 1 ] && ok "dock terminal launches xterm" || bad "dock terminal" "no xterm"
 
