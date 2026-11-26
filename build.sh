@@ -292,6 +292,21 @@ for b in /usr/bin/sudo /usr/bin/passwd /usr/bin/su /usr/bin/mount /usr/bin/umoun
          /usr/bin/chsh /usr/bin/chfn /usr/bin/newgrp /usr/bin/gpasswd; do
   [ -f "$ROOTFS$b" ] && chroot "$ROOTFS" chmod 4755 "$b"
 done
+# setgid binaries: chown -R root:root /usr above clears the setgid bit of
+# every non-root-group binary. xtrlock MUST be root:shadow 2755 again or it
+# cannot read /etc/shadow and dies with "password entry has no pwd" (the
+# dock lock button then silently does nothing). chage/expiry are shipped
+# setgid shadow by Debian as well; wall/write are setgid tty.
+for b in /usr/bin/xtrlock /usr/bin/chage /usr/bin/expiry; do
+  [ -f "$ROOTFS$b" ] && chroot "$ROOTFS" chown root:shadow "$b" \
+    && chroot "$ROOTFS" chmod 2755 "$b"
+done
+for b in /usr/bin/wall /usr/bin/write; do
+  [ -f "$ROOTFS$b" ] && chroot "$ROOTFS" chown root:tty "$b" \
+    && chroot "$ROOTFS" chmod 2755 "$b"
+done
+[ -f "$ROOTFS/usr/bin/xtrlock" ] || fail "xtrlock missing from rootfs"
+[ -g "$ROOTFS/usr/bin/xtrlock" ] || fail "/usr/bin/xtrlock lost its setgid shadow bit (screen lock would not run)"
 if [ -f "$ROOTFS/usr/lib/dbus-1.0/dbus-daemon-launch-helper" ]; then
   chroot "$ROOTFS" chown root:messagebus /usr/lib/dbus-1.0/dbus-daemon-launch-helper
   chroot "$ROOTFS" chmod 4750 /usr/lib/dbus-1.0/dbus-daemon-launch-helper
