@@ -1061,6 +1061,25 @@ fn keysym_name(ks: u32) -> String {
 // ---------------------------------------------------------------- main
 
 fn main() {
+    // single instance: clicking Settings twice must not stack windows
+    if std::fs::metadata("/tmp/.bravos-settings-running").is_ok() {
+        return;
+    }
+    struct LockGuard;
+    impl Drop for LockGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file("/tmp/.bravos-settings-running");
+        }
+    }
+    let _guard = LockGuard;
+    if std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open("/tmp/.bravos-settings-running")
+        .is_err()
+    {
+        return; // another instance is running
+    }
     let mut app = App::connect().expect("bsettings: X11 connect");
     let target = std::env::args().nth(1);
     let sa = SettingsApp::new(&app);

@@ -1,37 +1,49 @@
-//! Font handling: fontconfig lookup, freetype rasterization, rustybuzz
-//! shaping, per-character fallback across all installed script families.
+//! Font handling: filesystem discovery, fontdue rasterization, rustybuzz
+//! shaping, per-character fallback across installed script families.
+//! Pure Rust — no C dependencies (no pkg-config / freetype / fontconfig).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use freetype::face::LoadFlag;
-use freetype::Library;
+use fontdue::Font;
+use fontdue::FontSettings;
 
 pub struct CachedGlyph {
     pub w: i32,
     pub h: i32,
     pub left: i32,
     pub top: i32,
-    pub advance: i32, // 26.6
+    pub advance: i32,
     pub bitmap: Vec<u8>, // 8-bit coverage, w*h
 }
 
 struct FaceEntry {
     family: String,
-    ft: freetype::Face,
+    font: Font,
     hb: rustybuzz::Face<'static>,
     upem: u16,
     ascender: i16,
     descender: i16,
 }
 
-pub struct Fonts {
-    lib: Library,
-    faces: Vec<FaceEntry>,
-    fallback_for: HashMap<char, usize>,
-    cache: HashMap<(usize, u32, u32, bool), Arc<CachedGlyph>>, // face, size, gid, bold
+/// A discovered-but-maybe-not-loaded face (huge CJK files load lazily).
+#[derive(Clone)]
+struct FaceSlot {
+    family: String,
+    path: std::path::PathBuf,
+    index: u32,
+    big: bool,
 }
 
+pub struct Fonts {
+    slots: RefCell<Option<Vec<FaceSlot>>>, // scanned on first use
+    faces: RefCell<Vec<Option<FaceEntry>>>, // loaded faces, index == slot position
+    fallback_for: RefCell<HashMap<char, usize>>,
+    cache: RefCell<HashMap<(usize, u32, u32, bool), Arc<CachedGlyph>>>,
+}
+
+/// Preference order for the UI font stack. Everything else is appended.
 const FAMILY_ORDER: &[&str] = &[
     "Noto Sans",
     "DejaVu Sans",
@@ -50,76 +62,157 @@ const FAMILY_ORDER: &[&str] = &[
     "Noto Sans Bengali",
     "Noto Sans Tamil",
     "Noto Sans Sinhala",
-    "Noto Sans Burmese",
     "Liberation Sans",
     "WenQuanYi Zen Hei",
 ];
 
-impl Fonts {
-    /// Build the fallback list from fontconfig; missing families are skipped.
-    pub fn new() -> Fonts {
-        let lib = Library::init().expect("freetype init");
-        let mut faces = Vec::new();
-        let fc = fontconfig::Fontconfig::new();
-        if let Some(fc) = fc {
-            for fam in FAMILY_ORDER {
-                // resolve regular weight for the family
-                let Ok(m) = fc.find(fam, None) else { continue };
-                if faces.iter().any(|f: &FaceEntry| f.family == *fam) {
-                    continue;
-                }
-                if let Some(entry) = Self::load_face(&lib, m.path.to_str().unwrap_or(""), fam) {
-                    faces.push(entry);
-                }
+fn collect_font_files(dir: &str, out: &mut Vec<std::path::PathBuf>, depth: i32) {
+    if depth > 4 || out.len() > 400 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_font_files(path.to_str().unwrap_or(""), out, depth + 1);
+        } else {
+            let ext = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if matches!(ext.as_str(), "ttf" | "otf" | "ttc") {
+                out.push(path);
             }
         }
-        // Last-resort: scan well-known files directly (headless test hosts).
-        if faces.is_empty() {
-            for p in [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            ] {
-                if let Some(entry) = Self::load_face(&lib, p, "fallback") {
-                    faces.push(entry);
+    }
+}
+
+fn font_files() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(d) = std::env::var("BRAVOS_FONTS_DIR") {
+        dirs.push(d);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(format!("{}/.fonts", home));
+    }
+    dirs.push("/usr/local/share/fonts".into());
+    dirs.push("/usr/share/fonts".into());
+    let mut out = Vec::new();
+    for d in dirs {
+        collect_font_files(&d, &mut out, 0);
+    }
+    out
+}
+
+/// Number of faces inside a font file (1 for ttf/otf, N for .ttc).
+fn face_count(bytes: &[u8]) -> usize {
+    if bytes.len() > 12 && &bytes[0..4] == b"ttcf" {
+        u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize
+    } else {
+        1
+    }
+}
+
+fn read_family_name(bytes: &[u8], index: u32) -> Option<String> {
+    let face = rustybuzz::Face::from_slice(bytes, index)?;
+    // name_id 16 = typographic family, 1 = family. (2 is the subfamily
+    // "Regular"/"Bold" — NOT the family.)
+    let mut typographic = None;
+    let mut family = None;
+    for name in face.names() {
+        if !name.is_unicode() {
+            continue;
+        }
+        match name.name_id {
+            16 => typographic = name.to_string(),
+            1 => family = name.to_string(),
+            _ => {}
+        }
+    }
+    typographic.or(family)
+}
+
+impl Fonts {
+    pub fn new() -> Fonts {
+        Fonts {
+            slots: RefCell::new(None),
+            faces: RefCell::new(Vec::new()),
+            fallback_for: RefCell::new(HashMap::new()),
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Discover installed fonts on first use (cheap for apps that never
+    /// draw text, e.g. the wallpaper tool).
+    fn ensure_scan(&self) {
+        if self.slots.borrow().is_some() {
+            return;
+        }
+
+        let mut found: Vec<(String, std::path::PathBuf, u32, bool)> = Vec::new();
+        for path in font_files() {
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let big = bytes.len() > 12_000_000;
+            let n = face_count(&bytes);
+            for i in 0..n.min(8) {
+                if let Some(fam) = read_family_name(&bytes, i as u32) {
+                    found.push((fam, path.clone(), i as u32, big));
                     break;
                 }
             }
         }
-        Fonts {
-            lib,
-            faces,
-            fallback_for: HashMap::new(),
-            cache: HashMap::new(),
+        // order slots by FAMILY_ORDER preference, one face per family
+        let mut slots: Vec<FaceSlot> = Vec::new();
+        let mut take = |faces: &mut Vec<FaceSlot>, fam: &str| {
+            if faces.iter().any(|f| f.family == fam) {
+                return;
+            }
+            if let Some((_, path, idx, big)) =
+                found.iter().find(|(f, _, _, _)| f == fam)
+            {
+                faces.push(FaceSlot {
+                    family: fam.to_string(),
+                    path: path.clone(),
+                    index: *idx,
+                    big: *big,
+                });
+            }
+        };
+        for pref in FAMILY_ORDER {
+            take(&mut slots, pref);
         }
-    }
-
-    fn load_face(lib: &Library, path: &str, family: &str) -> Option<FaceEntry> {
-        // For TTC collections prefer an SC/TC face, else index 0.
-        let mut best_index: isize = 0;
-        let probe = lib.new_face(path, 0).ok()?;
-        let num = probe.num_faces();
-        if num > 1 {
-            for i in 0..num {
-                if let Ok(f) = lib.new_face(path, i as isize) {
-                    if let Some(name) = f.family_name() {
-                        if name.contains("SC") {
-                            best_index = i as isize;
-                            break;
-                        }
-                    }
-                }
+        for (fam, _, _, _) in found.iter() {
+            if !slots.iter().any(|f| &f.family == fam) {
+                take(&mut slots, fam);
             }
         }
-        let ft = lib.new_face(path, best_index).ok()?;
-        let bytes = std::fs::read(path).ok()?;
+        let mut loaded = Vec::with_capacity(slots.len());
+        for slot in slots.iter() {
+            if slot.big {
+                loaded.push(None); // deferred
+            } else {
+                loaded.push(Self::load_slot(slot));
+            }
+        }
+        *self.faces.borrow_mut() = loaded;
+        *self.slots.borrow_mut() = Some(slots);
+    }
+
+    fn load_slot(slot: &FaceSlot) -> Option<FaceEntry> {
+        let bytes = std::fs::read(&slot.path).ok()?;
         let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-        let hb = rustybuzz::Face::from_slice(leaked, best_index.max(0) as u32)?;
+        let hb = rustybuzz::Face::from_slice(leaked, slot.index)?;
         let upem = (hb.units_per_em().max(16)) as u16;
         let ascender = hb.ascender();
         let descender = hb.descender();
+        let font = Font::from_bytes(
+            std::borrow::Cow::Borrowed(leaked),
+            FontSettings { collection_index: slot.index, scale: 40.0, load_substitutions: false },
+        )
+        .ok()?;
         Some(FaceEntry {
-            family: family.to_string(),
-            ft,
+            family: slot.family.clone(),
+            font,
             hb,
             upem,
             ascender,
@@ -127,55 +220,84 @@ impl Fonts {
         })
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.faces.is_empty()
+    /// Debug: family + glyph id + rasterize metrics for a char.
+    pub fn glyph_debug(&self, c: char, size: u32) -> String {
+        let fi = self.face_for_char(c);
+        let faces = self.faces.borrow();
+        let f = faces[fi].as_ref().unwrap();
+        let gid = f.hb.glyph_index(c);
+        let gid_v = gid.map(|g| g.0).unwrap_or(u16::MAX);
+        let raster = if gid_v != u16::MAX {
+            let (m, cov) = f.font.rasterize_indexed(gid_v as u16, size as f32);
+            format!("gid={} box={}x{} adv={:.1} cov_len={} lit={}",
+                gid_v, m.width, m.height, m.advance_width,
+                cov.len(), cov.iter().filter(|&&v| v > 40).count())
+        } else {
+            "no glyph".into()
+        };
+        format!("face{} [{}] upem={} '{}' {}", fi, f.family, f.upem, c, raster)
     }
 
-    fn face_for_char(&mut self, c: char) -> usize {
-        if let Some(&i) = self.fallback_for.get(&c) {
+    fn face_for_char(&self, c: char) -> usize {
+        self.ensure_scan();
+        if let Some(&i) = self.fallback_for.borrow().get(&c) {
             return i;
         }
-        let mut idx = 0; // primary UI face is the default
-        for (i, f) in self.faces.iter().enumerate() {
-            if f.hb.glyph_index(c).is_some() {
-                idx = i;
-                break;
+        // already-loaded faces first
+        {
+            let faces = self.faces.borrow();
+            for (i, f) in faces.iter().enumerate() {
+                if let Some(f) = f {
+                    if f.hb.glyph_index(c).is_some() {
+                        self.fallback_for.borrow_mut().insert(c, i);
+                        return i;
+                    }
+                }
             }
         }
-        self.fallback_for.insert(c, idx);
-        idx
+        // lazy-load deferred (huge) faces until one covers the char
+        let n_slots = self.slots.borrow().as_ref().map(|v| v.len()).unwrap_or(0);
+        for i in 0..n_slots {
+            let loaded = self.faces.borrow()[i].is_some();
+            if loaded {
+                continue;
+            }
+            let slot = self.slots.borrow().as_ref().unwrap()[i].clone();
+            if let Some(entry) = Self::load_slot(&slot) {
+                let covers = entry.hb.glyph_index(c).is_some();
+                self.faces.borrow_mut()[i] = Some(entry);
+                if covers {
+                    self.fallback_for.borrow_mut().insert(c, i);
+                    return i;
+                }
+            }
+        }
+        self.fallback_for.borrow_mut().insert(c, 0);
+        0
     }
 
-    fn glyph(&mut self, face_idx: usize, size: u32, gid: u32, bold: bool) -> Arc<CachedGlyph> {
+    fn glyph(&self, face_idx: usize, size: u32, gid: u32, bold: bool) -> Arc<CachedGlyph> {
         let key = (face_idx, size, gid, bold);
-        if let Some(g) = self.cache.get(&key) {
+        if let Some(g) = self.cache.borrow().get(&key) {
             return g.clone();
         }
-        let face = &mut self.faces[face_idx];
-        let _ = face.ft.set_pixel_sizes(0, size);
-        let _ = face.ft.load_glyph(gid, LoadFlag::RENDER | LoadFlag::TARGET_NORMAL);
-        let slot = face.ft.glyph();
-        let bm = slot.bitmap();
-        let (bw, bh) = (bm.width() as i32, bm.rows() as i32);
-        let src: Vec<u8> = bm.buffer().to_vec();
-        let n = (bw * bh).max(0) as usize;
-        let mut bitmap = src;
-        bitmap.truncate(n);
-        bitmap.resize(n, 0);
+        let faces = self.faces.borrow();
+        let face = faces[face_idx].as_ref().expect("face loaded");
+        let (m, cov) = face.font.rasterize_indexed(gid as u16, size as f32);
+        let adv = m.advance_width.round() as i32;
         let g = Arc::new(CachedGlyph {
-            w: bw,
-            h: bh,
-            left: slot.bitmap_left(),
-            top: slot.bitmap_top(),
-            advance: slot.advance().x as i32,
-            bitmap,
+            w: m.width as i32,
+            h: m.height as i32,
+            left: m.xmin as i32,
+            top: m.ymin as i32, // bottom edge relative to baseline (up positive)
+            advance: adv,
+            bitmap: cov,
         });
-        self.cache.insert(key, g.clone());
+        self.cache.borrow_mut().insert(key, g.clone());
         g
     }
 
-    /// Split text into runs of (face_index, &str) by per-char coverage.
-    fn runs<'a>(&mut self, text: &'a str) -> Vec<(usize, &'a str)> {
+    fn runs<'a>(&self, text: &'a str) -> Vec<(usize, &'a str)> {
         let mut out = Vec::new();
         let mut cur: Option<usize> = None;
         let mut start = 0usize;
@@ -198,12 +320,12 @@ impl Fonts {
         out
     }
 
-    /// Shape a run and return (glyph_id, cluster_offset, x_offset, y_offset, x_advance) in pixels.
     #[allow(clippy::type_complexity)]
-    fn shape_run(&mut self, face_idx: usize, size: u32, text: &str, base_cluster: usize)
+    fn shape_run(&self, face_idx: usize, size: u32, text: &str, base_cluster: usize)
         -> Vec<(u32, usize, i32, i32, i32)>
     {
-        let face = &self.faces[face_idx];
+        let faces = self.faces.borrow();
+        let face = faces[face_idx].as_ref().expect("face loaded");
         let scale = size as f32 / face.upem as f32;
         let mut buf = rustybuzz::UnicodeBuffer::new();
         buf.push_str(text);
@@ -223,8 +345,7 @@ impl Fonts {
         out
     }
 
-    /// Measure the pixel width of a string.
-    pub fn measure(&mut self, size: u32, text: &str, bold: bool) -> f32 {
+    pub fn measure(&self, size: u32, text: &str, bold: bool) -> f32 {
         let mut w = 0f32;
         for (fi, run) in self.runs(text) {
             for (_gid, _c, _xo, _yo, adv) in self.shape_run(fi, size, run, 0) {
@@ -237,24 +358,24 @@ impl Fonts {
         w
     }
 
-    /// Pixel ascent of the primary face at `size`.
     pub fn ascent(&self, size: u32) -> i32 {
-        match self.faces.first() {
+        let faces = self.faces.borrow();
+        match faces.iter().flatten().next() {
             Some(f) => ((f.ascender as f32) * size as f32 / f.upem as f32).ceil() as i32,
             None => size as i32,
         }
     }
 
     pub fn descent(&self, size: u32) -> i32 {
-        match self.faces.first() {
+        let faces = self.faces.borrow();
+        match faces.iter().flatten().next() {
             Some(f) => ((-f.descender as f32) * size as f32 / f.upem as f32).ceil() as i32,
             None => (size as i32) / 4,
         }
     }
 
-    /// Draw a string with its baseline at (x, y). Returns final x.
     pub fn draw_baseline(
-        &mut self,
+        &self,
         cv: &mut crate::canvas::Canvas,
         x: f32,
         y: f32,
@@ -269,13 +390,12 @@ impl Fonts {
             for (gid, _cluster, xo, yo, adv) in shaped {
                 let g = self.glyph(fi, size, gid, false);
                 let px = (pen + xo as f32).floor() as i32;
-                let py = (y - yo as f32).floor() as i32;
+                let baseline = (y - yo as f32).floor() as i32;
+                // fontdue: ymin = bottom edge vs baseline (up positive)
+                let top = baseline - (g.top + g.h);
                 let extra = if bold { 1 } else { 0 };
                 for b in 0..=extra {
-                    cv.blit_alpha(
-                        &g.bitmap, g.w, g.h,
-                        px + g.left + b, py - g.top, color,
-                    );
+                    cv.blit_alpha(&g.bitmap, g.w, g.h, px + g.left + b, top, color);
                 }
                 pen += adv as f32;
             }
@@ -286,7 +406,6 @@ impl Fonts {
         pen
     }
 
-    /// Draw a string whose top-left box starts at (x, y).
     pub fn draw(
         &mut self,
         cv: &mut crate::canvas::Canvas,
@@ -300,7 +419,6 @@ impl Fonts {
         self.draw_baseline(cv, x, y + self.ascent(size) as f32, size, color, bold, text)
     }
 
-    /// Draw a string centered in a box.
     pub fn draw_centered(
         &mut self,
         cv: &mut crate::canvas::Canvas,
@@ -318,8 +436,7 @@ impl Fonts {
         self.draw_baseline(cv, bx, by + a, size, color, bold, text);
     }
 
-    /// Ellipsize text to fit `max_w`, appending "…".
-    pub fn ellipsize(&mut self, size: u32, text: &str, bold: bool, max_w: f32) -> String {
+    pub fn ellipsize(&self, size: u32, text: &str, bold: bool, max_w: f32) -> String {
         if self.measure(size, text, bold) <= max_w {
             return text.to_string();
         }

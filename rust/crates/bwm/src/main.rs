@@ -429,6 +429,26 @@ impl Wm {
             // its strut reservation if any
             self.absorb_strut(win);
             self.conn.map_window(win).ok();
+            // desktop-type windows live at the very bottom of the stack
+            let ty = self.atom("_NET_WM_WINDOW_TYPE");
+            let is_desktop = self
+                .conn
+                .get_property(false, win, ty, 0u32, 0, 8)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|r| r.value32().map(|it| it.collect::<Vec<u32>>()))
+                .map(|v| v.contains(&self.atom("_NET_WM_WINDOW_TYPE_DESKTOP")))
+                .unwrap_or(false);
+            if is_desktop {
+                self.conn
+                    .configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))
+                    .ok();
+            } else {
+                // dock/panel live above everything except focused app windows
+                self.conn
+                    .configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
+                    .ok();
+            }
             return;
         }
         let (mut x, mut y, mut w, mut h) = self.geom_for_new();
@@ -522,16 +542,21 @@ impl Wm {
         let mut cv = Canvas::new(w, h);
         let acc = self.cfg_accent();
         let (fill, border) = if focused {
-            ([16, 16, 22, 255], [acc[0], acc[1], acc[2], 255])
+            ([14, 14, 20, 255], [acc[0], acc[1], acc[2], 255])
         } else {
-            ([14, 14, 19, 255], [70, 70, 80, 255])
+            ([13, 13, 18, 255], [56, 56, 66, 255])
         };
         cv.fill(fill);
-        // border ring
-        cv.rect(0, 0, w, BORDER, border);
-        cv.rect(0, h - BORDER, w, BORDER, border);
-        cv.rect(0, 0, BORDER, h, border);
-        cv.rect(w - BORDER, 0, BORDER, h, border);
+        // outer dark hairline + colored ring for definition
+        let b = BORDER;
+        cv.rect(0, 0, w, 1, [0, 0, 0, 255]);
+        cv.rect(0, h - 1, w, 1, [0, 0, 0, 255]);
+        cv.rect(0, 0, 1, h, [0, 0, 0, 255]);
+        cv.rect(w - 1, 0, 1, h, [0, 0, 0, 255]);
+        cv.rect(1, 1, w - 2, b - 1, border);
+        cv.rect(1, h - b, w - 2, b - 1, border);
+        cv.rect(1, 1, b - 1, h - 2, border);
+        cv.rect(w - b, 1, b - 1, h - 2, border);
         self.conn
             .put_image(ImageFormat::Z_PIXMAP, frame, self.gc, w as u16, h as u16, 0, 0, 0, 24, &cv.to_argb())
             .ok();

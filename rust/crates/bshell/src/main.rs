@@ -16,11 +16,11 @@ use bui::pngutil::Image;
 use bui::xapp::{App, Handler, PtrKind, WinOpts};
 
 const PANEL_H: i32 = 40;
-const DOCK_W: i32 = 560;
-const DOCK_H: i32 = 190;
-const DOCK_CY_OFF: i32 = 300; // dome circle center below the window's top edge
-const DOCK_R_INNER: i32 = 200;
-const DOCK_R_OUTER: i32 = 285;
+const DOCK_W: i32 = 480;
+const DOCK_H: i32 = 172;
+const DOCK_CY_OFF: i32 = 240; // dome circle center below the window's top edge
+const DOCK_R_INNER: i32 = 170;
+const DOCK_R_OUTER: i32 = 235;
 const GRID_W: i32 = 620;
 const GRID_H: i32 = 430;
 const POWER_W: i32 = 240;
@@ -296,7 +296,7 @@ fn panel_layout(w: i32, shell: &Shell) -> Ui {
 fn dome_spans() -> Vec<(i32, i32, i32)> {
     let cx = DOCK_W / 2;
     let cy = DOCK_CY_OFF;
-    let r = 330;
+    let r = 285;
     let mut spans = Vec::new();
     for y in 0..DOCK_H {
         let dy = y - cy;
@@ -337,23 +337,23 @@ fn dock_buttons() -> Vec<(Rect, DockHit)> {
         out.push((Rect::new(x, y, size, size), hit));
     };
     let inner = [
-        (-40.0f32, DockHit::Files, 52),
-        (-20.0, DockHit::Settings, 52),
-        (0.0, DockHit::Brave, 76),
-        (20.0, DockHit::Terminal, 52),
-        (40.0, DockHit::Grid, 52),
+        (-38.0f32, DockHit::Files, 44),
+        (-19.0, DockHit::Settings, 44),
+        (0.0, DockHit::Brave, 64),
+        (19.0, DockHit::Terminal, 44),
+        (38.0, DockHit::Grid, 44),
     ];
     for (a, hit, size) in inner {
         place(&mut out, a, DOCK_R_INNER, size, hit);
     }
     let outer = [
-        (-38.0f32, DockHit::Moon),
-        (-20.0, DockHit::Wifi),
-        (20.0, DockHit::PowerBtn),
-        (38.0, DockHit::Lock),
+        (-34.0f32, DockHit::Moon),
+        (-17.0, DockHit::Wifi),
+        (17.0, DockHit::PowerBtn),
+        (34.0, DockHit::Lock),
     ];
     for (a, hit) in outer {
-        place(&mut out, a, DOCK_R_OUTER, 40, hit);
+        place(&mut out, a, DOCK_R_OUTER, 34, hit);
     }
     out
 }
@@ -365,8 +365,12 @@ fn draw_panel(app: &mut App, shell: &Shell, cv: &mut Canvas, ui: &Ui) {
     let acc = app.accent;
     cv.fill([0, 0, 0, 0]);
     let a = if comp { 225u8 } else { 255u8 };
-    cv.rect(0, 0, cv.w, PANEL_H, if std::env::var("BRAVOS_RED_TEST").is_ok() { [255, 0, 0, 255] } else if comp { [10, 10, 16, a] } else { [14, 14, 21, 255] });
-    cv.rect(0, PANEL_H - 1, cv.w, 1, [255, 255, 255, 30]);
+    if std::env::var("BRAVOS_RED_TEST").is_ok() {
+        cv.rect(0, 0, cv.w, PANEL_H, [255, 0, 0, 255]);
+    } else {
+        cv.rect(0, 0, cv.w, PANEL_H, [24, 24, 34, 255]);
+    }
+    cv.rect(0, PANEL_H - 1, cv.w, 1, [255, 255, 255, 34]);
 
     // logo + wordmark
     if let Some(icon) = app.icons.get("brave", 24, 24) {
@@ -396,9 +400,9 @@ fn draw_panel(app: &mut App, shell: &Shell, cv: &mut Canvas, ui: &Ui) {
         let t = &shell.tasks[*i];
         let is_active = t.win == shell.active;
         let (bg, ring) = if is_active {
-            ([acc[0], acc[1], acc[2], 70], [acc[0], acc[1], acc[2], 220])
+            ([acc[0], acc[1], acc[2], 92], [acc[0], acc[1], acc[2], 235])
         } else {
-            ([255, 255, 255, 26], [255, 255, 255, 46])
+            ([255, 255, 255, 30], [255, 255, 255, 55])
         };
         cv.rounded(r.x, r.y, r.w, r.h, 10, bg);
         cv.rounded_outline(r.x, r.y, r.w, r.h, 10, ring);
@@ -466,38 +470,46 @@ fn draw_dock(app: &mut App, shell: &Shell, cv: &mut Canvas) {
     cv.fill([0, 0, 0, 0]);
     let cx = cv.w / 2;
     let cy = DOCK_CY_OFF;
-    let r = 330;
-    let a = if comp { 150u8 } else { 210u8 };
+    let r = 285;
+    // frosted dome: radial falloff; without a compositor alpha is ignored,
+    // so we vary COLOR (not just alpha) to keep depth on 24-bit screens
+    let a = if comp { 135u8 } else { 235u8 };
     for yy in 0..cv.h {
         for xx in 0..cv.w {
             let dx = (xx - cx) as f32;
             let dy = (yy - cy) as f32;
-            if dx * dx + dy * dy <= (r * r) as f32 {
-                let t = 1.0 - dy / r as f32;
-                let alpha = (a as f32 * (0.55 + 0.45 * t)).clamp(0.0, 255.0) as u8;
-                cv.px(xx, yy, [10, 10, 18, alpha]);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= r as f32 {
+                let t = d / r as f32; // 0 center .. 1 rim
+                let alpha = (a as f32 * (0.55 + 0.45 * t * t)) as u8;
+                // color varies: lighter lavender near the icon band, darker rim
+                let cr = (30.0 - 18.0 * t) as u8;
+                let cg = (30.0 - 18.0 * t) as u8;
+                let cb = (48.0 - 26.0 * t) as u8;
+                cv.px(xx, yy, [cr, cg, cb, alpha]);
             }
         }
     }
-    cv.circle_outline(cx, cy, r, [255, 255, 255, 36]);
+    cv.circle_outline(cx, cy, r, [255, 255, 255, 70]);
+    cv.circle_outline(cx, cy, r - 10, [255, 255, 255, 26]);
 
     let buttons = dock_buttons();
     for (rect, hit) in &buttons {
         let size = rect.w;
         let center = rect.center();
         if *hit == DockHit::Brave {
-            cv.glow(center.0, center.1, size / 2 + 14, acc);
-            cv.circle_outline(center.0, center.1, size / 2 + 4, [acc[0], acc[1], acc[2], 180]);
-            cv.circle(center.0, center.1, size / 2, [16, 16, 24, 235]);
-            let isz = size - 16;
+            cv.glow(center.0, center.1, size / 2 + 9, acc);
+            cv.circle_outline(center.0, center.1, size / 2 + 4, [acc[0], acc[1], acc[2], 220]);
+            cv.circle(center.0, center.1, size / 2, [18, 18, 28, 245]);
+            let isz = size - 14;
             if let Some(icon) = shell.brave.as_ref().map(|b| b.resized(isz, isz)) {
                 cv.image(&icon, center.0 - isz / 2, center.1 - isz / 2);
             } else if let Some(icon) = app.icons.get("brave", isz, isz) {
                 cv.image(&icon, center.0 - isz / 2, center.1 - isz / 2);
             }
         } else {
-            cv.circle(center.0, center.1, size / 2, [20, 20, 30, 200]);
-            cv.circle_outline(center.0, center.1, size / 2, [255, 255, 255, 44]);
+            cv.circle(center.0, center.1, size / 2, [255, 255, 255, 26]);
+            cv.circle_outline(center.0, center.1, size / 2, [255, 255, 255, 80]);
             let (name, tint) = match hit {
                 DockHit::Files => ("folder", None),
                 DockHit::Settings => ("settings", None),
@@ -509,7 +521,7 @@ fn draw_dock(app: &mut App, shell: &Shell, cv: &mut Canvas) {
                 DockHit::Lock => ("lock", Some([235, 235, 240, 255])),
                 DockHit::Brave | DockHit::None => ("app", None),
             };
-            let sz = size - 18;
+            let sz = size - 14;
             if let Some(icon) = app.icons.get(name, sz, sz) {
                 match tint {
                     Some(t) => cv.image_tinted(&icon, center.0 - sz / 2, center.1 - sz / 2, t),

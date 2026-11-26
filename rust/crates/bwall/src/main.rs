@@ -1,6 +1,8 @@
 //! bwall — BraveOS desktop wallpaper (fullscreen desktop window).
 
 use bui::canvas::Canvas;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::*;
 use bui::pngutil::Image;
 use bui::xapp::{App, Handler, WinOpts};
 
@@ -78,5 +80,11 @@ fn main() {
         },
         Box::new(wall),
     );
+    // drop to the bottom of the root's sibling stack so the shell sits above
+    app.conn
+        .configure_window(app.win_ids()[0],
+            &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))
+        .ok();
+    app.conn.flush().ok();
     app.run_until(&|_app| false);
 }
