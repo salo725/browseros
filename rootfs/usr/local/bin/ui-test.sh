@@ -172,7 +172,20 @@ xdotool key --clearmodifiers Escape; sleep 0.5
 #     sake of the remaining checks)
 diag lock $(( SW / 2 + 131 )) $(( SH - 127 )); sleep 1.2
 LK=$(pgrep -c -x xtrlock)
-if [ "$LK" -ge 1 ]; then ok "dock-lock-runs-xtrlock"; else bad "dock-lock" "no xtrlock"; fi
+if [ "$LK" -ge 1 ]; then ok "dock-lock-runs-xtrlock"; else
+  bad "dock-lock" "no xtrlock"
+  # forensics: why did xtrlock exit? (binary mode, shadow entry, direct run)
+  echo "UITEST-DIAG xtrlock-bin: $(ls -la /usr/bin/xtrlock 2>&1 | head -1)"
+  echo "UITEST-DIAG shadow-brave-prefix: $(getent shadow brave 2>/dev/null | cut -c1-4 | sed 's/./&/g' | head -1)"
+  ( xtrlock >/tmp/xtr.err 2>&1 & echo $! >/tmp/xtr.pid )
+  sleep 1.5
+  if kill -0 "$(cat /tmp/xtr.pid 2>/dev/null)" 2>/dev/null; then
+    echo "UITEST-DIAG xtrlock-direct: RUNNING (click-path spawn was the issue)"
+    kill "$(cat /tmp/xtr.pid)" 2>/dev/null
+  else
+    echo "UITEST-DIAG xtrlock-direct: EXITED err=[$(head -c 200 /tmp/xtr.err 2>/dev/null)]"
+  fi
+fi
 pkill -x xtrlock; sleep 0.5
 
 # 16) language switch: write German config, restart shell, verify redraw works
