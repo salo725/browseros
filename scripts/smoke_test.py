@@ -166,11 +166,12 @@ def main():
             import shutil as _sh
             src = os.path.join(m, "isolinux", "isolinux.cfg")
             if os.path.exists(src):
-                for dst in ("syslinux.cfg", "isolinux/isolinux.cfg",
-                            "isolinux/syslinux.cfg",
+                for dst in ("syslinux.cfg", "isolinux/syslinux.cfg",
                             "syslinux/syslinux.cfg",
                             "boot/syslinux/syslinux.cfg"):
                     d = os.path.join(m, dst)
+                    if os.path.abspath(d) == os.path.abspath(src):
+                        continue
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     _sh.copyfile(src, d)
         if MODE == "fatbios":
