@@ -172,19 +172,29 @@ def main():
             # the c32 modules must come from the SAME syslinux version as
             # the ldlinux.sys that "syslinux --install" writes (the runner's
             # syslinux; the ISO's bookworm-built modules fail with "Failed
-            # to load COM32 file")
+            # to load COM32 file"). syslinux-common ships them; search the
+            # usual locations across distro layouts.
+            def _find_mod(name):
+                import glob
+                for p in ("/usr/lib/syslinux/modules/bios/%s" % name,
+                          "/usr/lib/syslinux/bios/%s" % name,
+                          "/usr/lib/syslinux/%s" % name,
+                          "/usr/share/syslinux/%s" % name):
+                    if os.path.exists(p):
+                        return p
+                g = glob.glob("/usr/lib/syslinux/**/%s" % name,
+                               recursive=True)
+                return g[0] if g else None
             for mod in ("ldlinux.c32", "menu.c32", "libutil.c32",
                         "libcom32.c32", "vesamenu.c32"):
-                p = "/usr/lib/syslinux/modules/bios/%s" % mod
-                if os.path.exists(p):
+                p = _find_mod(mod)
+                if p:
                     _sh.copyfile(p, os.path.join(m, mod))
                 else:
-                    print("[smoke] WARN: module source missing: %s" % p)
-            print("[smoke] FAT root contents: %s" % ", ".join(
-                sorted(os.listdir(m))[:24]))
-            have = {mod: os.path.exists(os.path.join(m, mod))
-                    for mod in ("ldlinux.c32", "menu.c32", "libutil.c32")}
-            print("[smoke] FAT root modules: %s" % have)
+                    print("[smoke] WARN: syslinux module not found: %s" % mod)
+            print("[smoke] FAT root modules: %s" % {
+                mod: os.path.exists(os.path.join(m, mod))
+                for mod in ("ldlinux.c32", "menu.c32", "libutil.c32")})
         if MODE == "fatbios":
             # find the loop device the mount attached (this is what Rufus's
             # "ISO Image" mode prepares: files + syslinux boot sector)

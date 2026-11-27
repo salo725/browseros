@@ -94,7 +94,7 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf python3-pip syslinux dosfstools p7zip-full
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf python3-pip syslinux syslinux-common dosfstools p7zip-full
           pip3 install --quiet pexpect pillow
           # make KVM usable by the runner user (images often leave it root-only)
           sudo chmod 666 /dev/kvm || true
