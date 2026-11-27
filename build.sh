@@ -468,7 +468,23 @@ for img in "$BOOTIMG_DIR"/*.img; do
 done
 [ -n "$EFI_BOOT_IMG" ] \
   || fail "no UEFI El Torito image found (is grub-efi-amd64-bin installed?)"
-mcopy -s -n -i "$EFI_BOOT_IMG" ::/EFI "$ISO_TREE/"
+mcopy -s -n -i "$EFI_BOOT_IMG" ::/EFI "$ISO_TREE/" || true
+# grub writes the tree into its FAT image with a version-dependent case
+# (grub 2.06 stores efi/boot/bootx64.efi; newer grubs use uppercase).
+# Normalize to the canonical EFI/BOOT/BOOTX64.EFI: deterministic check here
+# and the spec-canonical name on any filesystem the files land on.
+if [ ! -d "$ISO_TREE/EFI" ] && [ -d "$ISO_TREE/efi" ]; then
+  mv "$ISO_TREE/efi" "$ISO_TREE/EFI"
+fi
+if [ ! -d "$ISO_TREE/EFI/BOOT" ] && [ -d "$ISO_TREE/EFI/boot" ]; then
+  mv "$ISO_TREE/EFI/boot" "$ISO_TREE/EFI/BOOT"
+fi
+for f in "$ISO_TREE/EFI/BOOT"/*; do
+  [ -f "$f" ] || continue
+  b="$(basename "$f")"
+  u="$(printf '%s' "$b" | tr '[:lower:]' '[:upper:]')"
+  [ "$b" = "$u" ] || mv -f "$f" "$ISO_TREE/EFI/BOOT/$u"
+done
 [ -f "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" ] \
   || fail "failed to place visible EFI/BOOT/BOOTX64.EFI in the ISO tree"
 log "visible EFI/BOOT/BOOTX64.EFI added (Rufus ISO-mode UEFI boot)"
