@@ -174,13 +174,14 @@ def main():
                         continue
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     _sh.copyfile(src, d)
-            # syslinux --install puts ldlinux.sys in the FAT ROOT and then
-            # loads ldlinux.c32 from there; the cfg's "UI menu.c32" also
-            # resolves modules next to the config. Ship the whole module set
-            # to the root (that is effectively what Rufus arranges).
+            # syslinux --install wrote the RUNNER's ldlinux.sys into the FAT
+            # root; the c32 modules must come from the SAME syslinux version
+            # (the ISO's bookworm-built modules fail with "Failed to load
+            # COM32 file"). Copy the runner's module set to the root, where
+            # the loader and the root syslinux.cfg expect them.
             for mod in ("ldlinux.c32", "menu.c32", "libutil.c32",
                         "libcom32.c32", "vesamenu.c32"):
-                p = os.path.join(m, "isolinux", mod)
+                p = "/usr/lib/syslinux/modules/bios/%s" % mod
                 if os.path.exists(p):
                     _sh.copyfile(p, os.path.join(m, mod))
         if MODE == "fatbios":
