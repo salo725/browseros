@@ -178,6 +178,13 @@ def main():
                 p = "/usr/lib/syslinux/modules/bios/%s" % mod
                 if os.path.exists(p):
                     _sh.copyfile(p, os.path.join(m, mod))
+                else:
+                    print("[smoke] WARN: module source missing: %s" % p)
+            print("[smoke] FAT root contents: %s" % ", ".join(
+                sorted(os.listdir(m))[:24]))
+            have = {mod: os.path.exists(os.path.join(m, mod))
+                    for mod in ("ldlinux.c32", "menu.c32", "libutil.c32")}
+            print("[smoke] FAT root modules: %s" % have)
         if MODE == "fatbios":
             # find the loop device the mount attached (this is what Rufus's
             # "ISO Image" mode prepares: files + syslinux boot sector)
