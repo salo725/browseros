@@ -63,7 +63,11 @@ no GTK for the shell):
   with a pure-Rust text stack (fontdue + rustybuzz): proper shaping for
   Arabic/Devanagari/CJK in shell and settings.
 - Hybrid ISO: boots as CD/DVD, and as USB in **both Rufus modes** —
-  "ISO Image" and "DD Image" (CI boot-tests all three paths).
+  "ISO Image" and "DD Image" — on **BIOS and UEFI** firmware (CI
+  boot-tests all five combinations in QEMU/SeaBIOS/OVMF). The UEFI loader
+  is also grafted into the visible ISO tree, so any file-copy extraction
+  of the ISO (Rufus "ISO Image" mode, plain copy) yields a UEFI-bootable
+  volume, not just raw (DD) writes.
 
 ## Resource efficiency
 

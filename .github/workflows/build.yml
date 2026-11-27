@@ -77,7 +77,7 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "BraveOS ${VERSION}" \
-              --notes "Bootable ISO of BraveOS ${VERSION} (unofficial Brave-browser-centered Linux distribution). Boot via USB/DVD; UEFI machines must disable Secure Boot for v1. See README for details."
+              --notes "Bootable hybrid ISO of BraveOS ${VERSION} (Brave-browser-centered Linux distribution). Boots via CD/DVD, raw (DD) USB writes and Rufus 'ISO Image' mode on both BIOS and UEFI firmware (verified in CI with QEMU). UEFI machines must disable Secure Boot. See README for details."
           fi
           gh release upload "$TAG" out/*.iso out/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
@@ -131,7 +131,6 @@ jobs:
             ci*/ram-report.txt
             ci*/screenshot-*.png
             ci*/uitest-*.png
-            ci*/uitest-*.png
           retention-days: 30
           if-no-files-found: warn
 
@@ -151,6 +150,12 @@ jobs:
           name: braveos-iso
           path: out/
 
+      - name: Download test evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: braveos-test-evidence
+          path: evidence/
+
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -163,7 +168,20 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "BraveOS ${VERSION}" \
-              --notes "Bootable ISO of BraveOS ${VERSION} (unofficial Brave-browser-centered Linux distribution). Boot via USB/DVD; UEFI machines must disable Secure Boot for v1. See README for details."
+              --notes "Bootable hybrid ISO of BraveOS ${VERSION} (Brave-browser-centered Linux distribution). Boots via CD/DVD, raw (DD) USB writes and Rufus 'ISO Image' mode on both BIOS and UEFI firmware (verified in CI with QEMU). UEFI machines must disable Secure Boot. See README for details."
           fi
           gh release upload "$TAG" out/*.iso out/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
+          # attach boot-mode test screenshots (desktop, dock, Brave) to the
+          # release, prefixed with the boot mode they came from
+          mkdir -p release-evidence
+          for d in evidence/*/; do
+            mode=$(basename "$d")
+            for f in "$d"screenshot-*.png "$d"uitest-*.png; do
+              [ -f "$f" ] && cp "$f" "release-evidence/${mode}-$(basename "$f")"
+            done
+          done
+          if ls release-evidence/*.png >/dev/null 2>&1; then
+            gh release upload "$TAG" release-evidence/*.png \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          fi

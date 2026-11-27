@@ -433,11 +433,50 @@ else
   log "isolinux.bin not found - Rufus ISO-mode (BIOS) files skipped"
 fi
 
-log "grub-mkrescue -> hybrid ISO"
-grub-mkrescue -o "$OUT/braveos-$VERSION-amd64.iso" "$ISO_TREE" \
-  -- -volid BRAVEOS$VERSION -application_id "BraveOS $VERSION Live" >/dev/null 2>&1 \
-  || grub-mkrescue -o "$OUT/braveos-$VERSION-amd64.iso" "$ISO_TREE" \
-       -- -volid BRAVEOS$VERSION -application_id "BraveOS $VERSION Live"
+# TWO-PASS grub-mkrescue:
+#   pass 1 produces a throwaway ISO so we can harvest grub-mkrescue's own
+#   El Torito UEFI boot image (a FAT image carrying EFI/BOOT/BOOTX64.EFI).
+#   Its contents are grafted into the VISIBLE ISO9660 tree, then pass 2
+#   produces the final ISO. This is what makes a file-copy extraction of
+#   the ISO (Rufus "ISO Image" mode, manual copy, Ventoy, ...) UEFI-bootable:
+#   grub-mkrescue hides the EFI loader inside the El Torito image and the
+#   appended ESP partition, which only raw (DD) writes preserve.
+#   Verified in QEMU/OVMF: extracted FAT boots (superfloppy and MBR-
+#   partitioned), raw DD boots, El Torito boot paths unchanged.
+grub_rescue() {  # $1 = output iso
+  grub-mkrescue -o "$1" "$ISO_TREE" \
+    -- -volid BRAVEOS$VERSION -application_id "BraveOS $VERSION Live" >/dev/null 2>&1 \
+    || grub-mkrescue -o "$1" "$ISO_TREE" \
+         -- -volid BRAVEOS$VERSION -application_id "BraveOS $VERSION Live"
+}
+
+log "grub-mkrescue pass 1: harvest the El Torito UEFI boot image"
+TMP_ISO="$BUILD_DIR/grub-pass1.iso"
+grub_rescue "$TMP_ISO" || fail "grub-mkrescue pass 1 failed"
+
+BOOTIMG_DIR="$BUILD_DIR/bootimgs"
+rm -rf "$BOOTIMG_DIR"; mkdir -p "$BOOTIMG_DIR"
+xorriso -osirrox on -indev "$TMP_ISO" -extract_boot_images "$BOOTIMG_DIR" >/dev/null 2>&1 \
+  || fail "cannot extract El Torito boot images from pass-1 ISO"
+EFI_BOOT_IMG=""
+for img in "$BOOTIMG_DIR"/*.img; do
+  [ -e "$img" ] || continue
+  if mdir -i "$img" ::/EFI/BOOT >/dev/null 2>&1; then
+    EFI_BOOT_IMG="$img"
+    break
+  fi
+done
+[ -n "$EFI_BOOT_IMG" ] \
+  || fail "no UEFI El Torito image found (is grub-efi-amd64-bin installed?)"
+mcopy -s -n -i "$EFI_BOOT_IMG" ::/EFI "$ISO_TREE/"
+[ -f "$ISO_TREE/EFI/BOOT/BOOTX64.EFI" ] \
+  || fail "failed to place visible EFI/BOOT/BOOTX64.EFI in the ISO tree"
+log "visible EFI/BOOT/BOOTX64.EFI added (Rufus ISO-mode UEFI boot)"
+rm -f "$TMP_ISO"
+
+log "grub-mkrescue pass 2: final hybrid ISO"
+grub_rescue "$OUT/braveos-$VERSION-amd64.iso" \
+  || fail "grub-mkrescue pass 2 failed"
 
 # -----------------------------------------------------------------------------
 # 10. Output
