@@ -160,25 +160,19 @@ def main():
         subprocess.run(["7z", "x", "-y", "-o%s" % m, ISO],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if MODE == "fatbios":
-            # syslinux (FAT boot sector) searches for syslinux.cfg, NOT the
-            # isolinux.cfg the ISO carries - place it everywhere it looks.
-            # (Rufus "ISO Image" mode does the equivalent internally.)
+            # syslinux (FAT boot sector) does not read isolinux.cfg; place
+            # syslinux.cfg in the root together with the c32 modules it
+            # references (modules load relative to the config directory, so
+            # config and modules must share ONE directory).
+            # (Rufus "ISO Image" mode performs the equivalent arrangement.)
             import shutil as _sh
             src = os.path.join(m, "isolinux", "isolinux.cfg")
             if os.path.exists(src):
-                for dst in ("syslinux.cfg", "isolinux/syslinux.cfg",
-                            "syslinux/syslinux.cfg",
-                            "boot/syslinux/syslinux.cfg"):
-                    d = os.path.join(m, dst)
-                    if os.path.abspath(d) == os.path.abspath(src):
-                        continue
-                    os.makedirs(os.path.dirname(d), exist_ok=True)
-                    _sh.copyfile(src, d)
-            # syslinux --install wrote the RUNNER's ldlinux.sys into the FAT
-            # root; the c32 modules must come from the SAME syslinux version
-            # (the ISO's bookworm-built modules fail with "Failed to load
-            # COM32 file"). Copy the runner's module set to the root, where
-            # the loader and the root syslinux.cfg expect them.
+                _sh.copyfile(src, os.path.join(m, "syslinux.cfg"))
+            # the c32 modules must come from the SAME syslinux version as
+            # the ldlinux.sys that "syslinux --install" writes (the runner's
+            # syslinux; the ISO's bookworm-built modules fail with "Failed
+            # to load COM32 file")
             for mod in ("ldlinux.c32", "menu.c32", "libutil.c32",
                         "libcom32.c32", "vesamenu.c32"):
                 p = "/usr/lib/syslinux/modules/bios/%s" % mod
