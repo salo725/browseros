@@ -153,15 +153,37 @@ def main():
                         "seek=2600", "count=1"], check=True)
         subprocess.run(["mkfs.vfat", "-F", "32", fat], check=True)
         m = tempfile.mkdtemp(prefix="bravosfat")
-        subprocess.run(["mount", "-o", "loop,uid=$(id -u)", fat, m], check=True)
+        # loop mounts need root on GitHub runners (passwordless sudo there);
+        # uid= makes the mounted FAT files writable by the runner user
+        subprocess.run(["sudo", "mount", "-o", "loop,uid=%d" % os.getuid(),
+                        fat, m], check=True)
         subprocess.run(["7z", "x", "-y", "-o%s" % m, ISO],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if MODE == "fatbios":
-            dev = os.popen("losetup --list --output NAME "
-                           "--associate %s | tail -1" % fat).read().strip()
+            # syslinux (FAT boot sector) searches for syslinux.cfg, NOT the
+            # isolinux.cfg the ISO carries - place it everywhere it looks.
+            # (Rufus "ISO Image" mode does the equivalent internally.)
+            import shutil as _sh
+            src = os.path.join(m, "isolinux", "isolinux.cfg")
+            if os.path.exists(src):
+                for dst in ("syslinux.cfg", "isolinux/isolinux.cfg",
+                            "isolinux/syslinux.cfg",
+                            "syslinux/syslinux.cfg",
+                            "boot/syslinux/syslinux.cfg"):
+                    d = os.path.join(m, dst)
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    _sh.copyfile(src, d)
+        if MODE == "fatbios":
+            # find the loop device the mount attached (this is what Rufus's
+            # "ISO Image" mode prepares: files + syslinux boot sector)
+            out = subprocess.run(
+                ["sudo", "losetup", "--list", "--output", "NAME", "--associate", fat],
+                capture_output=True, text=True, check=True).stdout
+            dev = out.strip().splitlines()[-1].strip() if out.strip() else ""
             part = dev + "p1" if dev and os.path.exists(dev + "p1") else dev
-            subprocess.run(["syslinux", "--install", part or dev], check=True)
-        subprocess.run(["umount", m], check=True)
+            subprocess.run(["sudo", "syslinux", "--install", part or dev],
+                           check=True)
+        subprocess.run(["sudo", "umount", m], check=True)
         cmd += ["-drive", "file=%s,format=raw,media=disk" % fat, "-boot", "c"]
         if MODE == "fatuefi":
             ovmf = None

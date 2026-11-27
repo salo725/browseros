@@ -396,9 +396,18 @@ if [ -n "$ISOLINUX_BIN" ]; then
     [ -f "$p" ] && LDLINUX="$p" && break
   done
   [ -n "$LDLINUX" ] && cp "$LDLINUX" "$ISO_TREE/isolinux/ldlinux.c32"
+  # menu.c32 (and its libutil.c32 dependency) must sit next to the config:
+  # the cfg uses "UI menu.c32", and the Rufus ISO-mode FAT emulation boots
+  # straight from these files - without them syslinux drops to a boot: prompt
+  for mod in menu.c32 libutil.c32; do
+    for p in "/usr/lib/syslinux/modules/bios/$mod" "/usr/lib/ISOLINUX/$mod"; do
+      [ -f "$p" ] && cp "$p" "$ISO_TREE/isolinux/" && break
+    done
+  done
   cat > "$ISO_TREE/isolinux/isolinux.cfg" <<'EOF'
 SERIAL 0 115200
 UI menu.c32
+MENU TITLE BraveOS Live
 TIMEOUT 60
 PROMPT 0
 
