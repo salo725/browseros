@@ -174,6 +174,15 @@ def main():
                         continue
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     _sh.copyfile(src, d)
+            # syslinux --install puts ldlinux.sys in the FAT ROOT and then
+            # loads ldlinux.c32 from there; the cfg's "UI menu.c32" also
+            # resolves modules next to the config. Ship the whole module set
+            # to the root (that is effectively what Rufus arranges).
+            for mod in ("ldlinux.c32", "menu.c32", "libutil.c32",
+                        "libcom32.c32", "vesamenu.c32"):
+                p = os.path.join(m, "isolinux", mod)
+                if os.path.exists(p):
+                    _sh.copyfile(p, os.path.join(m, mod))
         if MODE == "fatbios":
             # find the loop device the mount attached (this is what Rufus's
             # "ISO Image" mode prepares: files + syslinux boot sector)
